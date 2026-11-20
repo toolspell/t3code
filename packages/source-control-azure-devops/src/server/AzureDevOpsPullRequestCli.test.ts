@@ -4,13 +4,18 @@ import * as NodeZlib from "node:zlib";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterEach, assert, expect, it, vi } from "@effect/vitest";
+import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
+import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { ChildProcessSpawner } from "effect/process";
+import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
 import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
 import * as AzureDevOpsPullRequestProvider from "./AzureDevOpsPullRequestProvider.ts";
+import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
+import * as AzureDevOpsRouting from "./AzureDevOpsRouting.ts";
 
 const mockedExecute = vi.fn<AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]>();
 
@@ -21,9 +26,80 @@ const layer = it.layer(
         execute: mockedExecute,
       }),
     ),
+    // No saved token: every call takes the Azure CLI, and REST must not be reached.
+    Layer.provide(AzureDevOpsRouting.layer),
+    Layer.provide(TestSourceControlHost.layer()),
+    Layer.provide(Layer.mock(AzureDevOpsRest.AzureDevOpsRest)({})),
     Layer.provide(NodeServices.layer),
   ),
 );
+
+it.effect("names the viewer from connectionData when the organization has a saved token", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const execute = vi.fn<AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]>(() =>
+    Effect.die("An organization with a saved token must not reach az."),
+  );
+  const host = TestSourceControlHost.layer({
+    process: {
+      run: () =>
+        Effect.succeed(
+          TestSourceControlHost.processOutput(
+            "origin\thttps://dev.azure.com/contoso/web/_git/app (fetch)\n",
+          ),
+        ),
+    },
+  });
+  const layer = AzureDevOpsPullRequestCli.layer.pipe(
+    Layer.provide(Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({ execute })),
+    Layer.provide(AzureDevOpsRouting.layer),
+    Layer.provide(
+      AzureDevOpsRest.layer.pipe(
+        Layer.provide(SourceControlRateLimit.layer),
+        Layer.provide(
+          Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.make((request) => {
+              requests.push(request);
+              return Effect.succeed(
+                HttpClientResponse.fromWeb(
+                  request,
+                  Response.json({
+                    authenticatedUser: {
+                      id: "c50f0341-3b9a-46d8-81e9-769d2e509704",
+                      providerDisplayName: "Bilal",
+                      properties: { Account: { $type: "System.String", $value: "bilal@acme.dev" } },
+                    },
+                  }),
+                ),
+              );
+            }),
+          ),
+        ),
+      ),
+    ),
+    Layer.provideMerge(host),
+    Layer.provide(NodeServices.layer),
+  );
+  return Effect.gen(function* () {
+    yield* TestSourceControlHost.TestSourceControlHostSettings.use((settings) =>
+      settings.update({
+        sourceControlHosts: {
+          "azure-devops": { tokens: { "https://dev.azure.com/contoso": "contoso-pat" } },
+        },
+      }),
+    );
+    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+    assert.strictEqual(yield* cli.getViewer({ cwd: "/w" }), "bilal@acme.dev");
+    const url = new URL(requests[0]!.url);
+    assert.strictEqual(
+      url.origin + url.pathname,
+      "https://dev.azure.com/contoso/_apis/connectionData",
+    );
+    assert.strictEqual(url.searchParams.get("api-version"), "7.1-preview");
+    expect(execute).not.toHaveBeenCalled();
+  }).pipe(Effect.provide(layer));
+});
 
 function output(stdout: string) {
   return {

@@ -376,7 +376,8 @@ export function primaryRemoteUrl(output: string) {
   );
 }
 
-function scopeFromRemoteUrl(remote: string) {
+/** Organization, project, and repository of an Azure DevOps Services remote; null for any other. */
+export function scopeFromRemoteUrl(remote: string) {
   try {
     const scp = /^(?:[^@/]+@)?([^/:]+):(.+)$/u.exec(remote);
     const url = new URL(
@@ -411,6 +412,7 @@ function scopeFromRemoteUrl(remote: string) {
     if (legacy && !/^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/u.test(organization))
       return null;
     return {
+      organizationName: organization,
       // az keys organization-scoped credentials by the original host family.
       organization: legacy
         ? `https://${organization}.visualstudio.com`
@@ -422,6 +424,39 @@ function scopeFromRemoteUrl(remote: string) {
     return null;
   }
 }
+
+/** The checkout's primary remote, or null when git cannot name one. */
+export const checkoutRemoteUrl = (
+  process: SourceControlHost.SourceControlHost["Service"]["process"],
+  cwd: string,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+) =>
+  process
+    .run({
+      operation: "AzureDevOpsCli.resolveScope",
+      command: "git",
+      args: ["remote", "-v"],
+      cwd,
+      env: {
+        GIT_DIR: undefined,
+        GIT_WORK_TREE: undefined,
+        GIT_COMMON_DIR: undefined,
+        GIT_INDEX_FILE: undefined,
+        GIT_OBJECT_DIRECTORY: undefined,
+        GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined,
+      },
+      timeoutMs,
+      maxOutputBytes: 64 * 1024,
+      allowNonZeroExit: true,
+    })
+    .pipe(
+      Effect.map((remotes) =>
+        remotes.exitCode === 0 && !remotes.stdoutTruncated && !remotes.stdoutInvalidUtf8
+          ? primaryRemoteUrl(remotes.stdout)
+          : null,
+      ),
+      Effect.orElseSucceed(() => null),
+    );
 
 const remoteOf = (input: { readonly remoteUrl?: string }) =>
   input.remoteUrl === undefined ? {} : { remoteUrl: input.remoteUrl };
@@ -528,33 +563,7 @@ export const make = Effect.gen(function* () {
       if (detectsScope(args)) {
         // Windows az running in WSL cannot inspect the server's Linux checkout.
         const remoteUrl =
-          input.remoteUrl ??
-          (yield* process
-            .run({
-              operation: "AzureDevOpsCli.resolveScope",
-              command: "git",
-              args: ["remote", "-v"],
-              cwd: input.cwd,
-              env: {
-                GIT_DIR: undefined,
-                GIT_WORK_TREE: undefined,
-                GIT_COMMON_DIR: undefined,
-                GIT_INDEX_FILE: undefined,
-                GIT_OBJECT_DIRECTORY: undefined,
-                GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined,
-              },
-              timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-              maxOutputBytes: 64 * 1024,
-              allowNonZeroExit: true,
-            })
-            .pipe(
-              Effect.map((remotes) =>
-                remotes.exitCode === 0 && !remotes.stdoutTruncated && !remotes.stdoutInvalidUtf8
-                  ? primaryRemoteUrl(remotes.stdout)
-                  : null,
-              ),
-              Effect.orElseSucceed(() => null),
-            ));
+          input.remoteUrl ?? (yield* checkoutRemoteUrl(process, input.cwd, input.timeoutMs));
         if (remoteUrl !== null) args = scopeAzureCliArgs(args, remoteUrl);
       }
       return yield* process

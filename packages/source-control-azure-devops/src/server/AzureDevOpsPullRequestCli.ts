@@ -15,9 +15,12 @@ import type {
 } from "@t3tools/contracts";
 
 import { sortChecks } from "@t3tools/source-control-core/server/pullRequestChecks";
+import type * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
 import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
 import { blobContent, readBlobZip } from "./azureDevOpsBlobZip.ts";
+import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
+import * as AzureDevOpsRouting from "./AzureDevOpsRouting.ts";
 import {
   decodeItemContentJson,
   decodeIterationChangesJson,
@@ -108,7 +111,19 @@ export type AzureDevOpsPullRequestCliError =
   | AzureDevOpsPullRequestReadError
   | AzureDevOpsPullRequestIncompleteError
   | AzureDevOpsReviewerNameError
-  | AzureDevOpsViewerUnavailableError;
+  | AzureDevOpsViewerUnavailableError
+  | AzureDevOpsRest.AzureDevOpsRestError
+  | SourceControlRateLimit.SourceControlRateLimitPausedError
+  | AzureDevOpsRouting.AzureDevOpsTokenUnavailableError;
+
+/** `properties.Account` is the sign-in name, which pull requests show as `uniqueName`. */
+const RestViewerSchema = Schema.Struct({
+  authenticatedUser: Schema.Struct({
+    properties: Schema.Struct({
+      Account: Schema.Struct({ $value: Schema.NonEmptyString }),
+    }),
+  }),
+});
 
 const REST_API_VERSION = "7.1";
 const PULL_REQUEST_LIST_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
@@ -321,6 +336,8 @@ function isReviewerName(value: string): boolean {
 /** @public */
 export const make = Effect.gen(function* () {
   const azure = yield* AzureDevOpsCli.AzureDevOpsCli;
+  const rest = yield* AzureDevOpsRest.AzureDevOpsRest;
+  const routing = yield* AzureDevOpsRouting.AzureDevOpsRouting;
   const fileSystem = yield* FileSystem.FileSystem;
 
   const detectArgs = ["--detect", "true"] as const;
@@ -489,58 +506,78 @@ export const make = Effect.gen(function* () {
     );
   };
 
+  const cliViewer = (input: { readonly cwd: string }) =>
+    executeJson({ cwd: input.cwd, args: ["account", "show", "--query", "user"] }).pipe(
+      Effect.flatMap((result): Effect.Effect<string, AzureDevOpsPullRequestCliError> => {
+        const decoded = decodeViewerJson(`{"user":${result.stdout.trim() || "null"}}`);
+        if (!Result.isSuccess(decoded)) {
+          return Effect.fail(
+            new AzureDevOpsPullRequestReadError({
+              command: "az",
+              cwd: input.cwd,
+              operation: "getViewer",
+              cause: decoded.failure,
+            }),
+          );
+        }
+        return decoded.success === null
+          ? Effect.fail(new AzureDevOpsViewerUnavailableError({ command: "az", cwd: input.cwd }))
+          : Effect.succeed(decoded.success);
+      }),
+      // `az account show` cannot identify PAT logins; the extension resolves `--creator me`.
+      Effect.catchIf(
+        (error) => error._tag !== "AzureDevOpsCliUnavailableError",
+        () =>
+          executeJson({
+            cwd: input.cwd,
+            args: [
+              "repos",
+              "pr",
+              "list",
+              ...detectArgs,
+              "--creator",
+              "me",
+              "--status",
+              "all",
+              "--top",
+              "1",
+            ],
+          }).pipe(
+            Effect.flatMap((result): Effect.Effect<string, AzureDevOpsPullRequestCliError> => {
+              const decoded = decodePullRequestListJson(result.stdout.trim() || "[]");
+              const login = Result.isSuccess(decoded)
+                ? decoded.success.items[0]?.author?.login
+                : undefined;
+              return login === undefined
+                ? Effect.fail(
+                    new AzureDevOpsViewerUnavailableError({ command: "az", cwd: input.cwd }),
+                  )
+                : Effect.succeed(login);
+            }),
+          ),
+      ),
+    );
+
   return AzureDevOpsPullRequestCli.of({
     getViewer: Effect.fn("AzureDevOpsPullRequestCli.getViewer")(function (input) {
-      return executeJson({ cwd: input.cwd, args: ["account", "show", "--query", "user"] }).pipe(
-        Effect.flatMap((result): Effect.Effect<string, AzureDevOpsPullRequestCliError> => {
-          const decoded = decodeViewerJson(`{"user":${result.stdout.trim() || "null"}}`);
-          if (!Result.isSuccess(decoded)) {
-            return Effect.fail(
-              new AzureDevOpsPullRequestReadError({
-                command: "az",
-                cwd: input.cwd,
+      return AzureDevOpsRouting.byRoute(routing, input, {
+        rest: (route) =>
+          rest
+            .json(
+              {
+                organizationUrl: route.organizationUrl,
+                token: route.token,
                 operation: "getViewer",
-                cause: decoded.failure,
-              }),
-            );
-          }
-          return decoded.success === null
-            ? Effect.fail(new AzureDevOpsViewerUnavailableError({ command: "az", cwd: input.cwd }))
-            : Effect.succeed(decoded.success);
-        }),
-        // `az account show` cannot identify PAT logins; the extension resolves `--creator me`.
-        Effect.catchIf(
-          (error) => error._tag !== "AzureDevOpsCliUnavailableError",
-          () =>
-            executeJson({
-              cwd: input.cwd,
-              args: [
-                "repos",
-                "pr",
-                "list",
-                ...detectArgs,
-                "--creator",
-                "me",
-                "--status",
-                "all",
-                "--top",
-                "1",
-              ],
-            }).pipe(
-              Effect.flatMap((result): Effect.Effect<string, AzureDevOpsPullRequestCliError> => {
-                const decoded = decodePullRequestListJson(result.stdout.trim() || "[]");
-                const login = Result.isSuccess(decoded)
-                  ? decoded.success.items[0]?.author?.login
-                  : undefined;
-                return login === undefined
-                  ? Effect.fail(
-                      new AzureDevOpsViewerUnavailableError({ command: "az", cwd: input.cwd }),
-                    )
-                  : Effect.succeed(login);
-              }),
+                path: "_apis/connectionData",
+                apiVersion: "7.1-preview",
+              },
+              RestViewerSchema,
+            )
+            .pipe(
+              Effect.map((answer) => answer.authenticatedUser.properties.Account.$value.trim()),
             ),
-        ),
-      );
+        cli: () => cliViewer(input),
+      });
     }),
 
     listPullRequests: Effect.fn("AzureDevOpsPullRequestCli.listPullRequests")(function (input) {

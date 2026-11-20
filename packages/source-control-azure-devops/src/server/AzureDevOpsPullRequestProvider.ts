@@ -127,6 +127,28 @@ function azureDevOpsProviderFailure(
   if (error._tag === "AzureDevOpsCliAuthenticationError") return { reason: "unauthenticated" };
   if (error._tag === "AzureDevOpsCliRateLimitError") return { reason: "rate-limited" };
   if (error._tag === "AzureDevOpsPullRequestNotFoundError") return { reason: "not-found" };
+  if (error._tag === "AzureDevOpsTokenUnavailableError") return { reason: "unauthenticated" };
+  if (error._tag === "SourceControlRateLimitPausedError") {
+    return { reason: "rate-limited", retryAt: error.retryAt };
+  }
+  if (error._tag === "AzureDevOpsRestError") {
+    switch (error.reason) {
+      case "authentication":
+      case "scope":
+        return { reason: "unauthenticated" };
+      case "permission":
+        return { reason: "forbidden" };
+      case "not-found":
+        return { reason: "not-found" };
+      case "rate-limited":
+        return {
+          reason: "rate-limited",
+          ...(error.retryAt === undefined ? {} : { retryAt: error.retryAt }),
+        };
+      default:
+        return { reason: "failed" };
+    }
+  }
   return { reason: "failed" };
 }
 
