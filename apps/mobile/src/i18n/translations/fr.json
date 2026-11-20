@@ -5204,6 +5204,7 @@
   "431d136c241a7098": "Disponible. {hint}",
   "616657863f82bc31": "Tous les hôtes {provider} sont désactivés.",
   "fc5c150f6f35eb7f": "Non authentifié sur ce serveur. Connectez-vous avec l’outil {tool} sur l’hôte du serveur ou enregistrez un jeton ici.",
+  "33aad5b55091c706": "Non authentifié sur ce serveur. Connectez-vous avec l’outil {tool} sur l’hôte du serveur.",
   "52658eebf5ac80ab": "Impossible de vérifier {provider}. {detail}",
   "55e008c7335ccee3": "Fournisseurs de gestion de versions · {environment}",
   "3bd42b40bd62ca11": "Fournisseurs de gestion de versions",

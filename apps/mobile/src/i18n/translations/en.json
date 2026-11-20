@@ -5211,6 +5211,7 @@
   "431d136c241a7098": "Available. {hint}",
   "616657863f82bc31": "Every {provider} host is turned off.",
   "fc5c150f6f35eb7f": "Not authenticated on this server. Sign in with the {tool} tool on the server host, or save a token here.",
+  "33aad5b55091c706": "Not authenticated on this server. Sign in with the {tool} tool on the server host.",
   "52658eebf5ac80ab": "Could not verify {provider}. {detail}",
   "55e008c7335ccee3": "Source control providers · {environment}",
   "3bd42b40bd62ca11": "Source control providers",

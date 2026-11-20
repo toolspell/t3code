@@ -5210,6 +5210,7 @@
   "431d136c241a7098": "Tillgänglig. {hint}",
   "616657863f82bc31": "Alla värdar för {provider} är avstängda.",
   "fc5c150f6f35eb7f": "Inte autentiserad på den här servern. Logga in med verktyget {tool} på servervärden eller spara en token här.",
+  "33aad5b55091c706": "Inte autentiserad på den här servern. Logga in med verktyget {tool} på servervärden.",
   "52658eebf5ac80ab": "Kunde inte verifiera {provider}. {detail}",
   "55e008c7335ccee3": "Leverantörer för versionshantering · {environment}",
   "3bd42b40bd62ca11": "Leverantörer av versionshantering",

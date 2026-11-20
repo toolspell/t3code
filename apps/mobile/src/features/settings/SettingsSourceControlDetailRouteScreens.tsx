@@ -32,6 +32,7 @@ import {
   sourceControlProviderSummary,
 } from "./components/SourceControlProvidersSection";
 import { AppSignInRow } from "./components/SourceControlSignInSection";
+import { hasVisibleHostFields } from "./components/sourceControlHostForm.logic";
 import type { SettingsTarget } from "./settings-environment-filter";
 
 /** The environment a detail page edits, once it is connected, and whether this session may. */
@@ -125,7 +126,7 @@ export function SettingsSourceControlProviderRouteScreen({
               />
             </SettingsSection>
           ) : null}
-          {!credentials && definition.settings ? (
+          {!credentials && definition.settings && hasVisibleHostFields(definition.settings) ? (
             <SettingsSection title={gt("Credentials")}>
               <SourceControlHostFieldsForm
                 environment={environment}

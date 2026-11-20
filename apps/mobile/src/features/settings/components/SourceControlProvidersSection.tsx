@@ -14,7 +14,6 @@ import type {
   SourceControlProviderDiscoveryItem,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import { useNavigation } from "@react-navigation/native";
 import { msg, useGT, useMessages } from "gt-react-native";
 import { useState } from "react";
@@ -33,6 +32,11 @@ import { SourceControlIcon } from "../../projects/SourceControlIcon";
 import type { SettingsTarget } from "../settings-environment-filter";
 import { SettingsProviderRow } from "./SettingsProviderRow";
 import { SettingsSection } from "./SettingsSection";
+import {
+  hasMobileCredentialsForm,
+  hostSettingsFields,
+  type HostSettings,
+} from "./sourceControlHostForm.logic";
 
 const saveFailure = (result: Parameters<typeof squashAtomCommandFailure>[0]) => {
   const error = squashAtomCommandFailure(result);
@@ -69,12 +73,21 @@ export function sourceControlProviderSummary(
       return (
         detail ?? resolve(msg("Every {provider} host is turned off.", { provider: item.label }))
       );
-    return resolve(
-      msg(
-        "Not authenticated on this server. Sign in with the {tool} tool on the server host, or save a token here.",
-        { tool: item.executable },
-      ),
-    );
+    return hasMobileCredentialsForm(sourceControlClients.find(item.kind))
+      ? resolve(
+          msg(
+            "Not authenticated on this server. Sign in with the {tool} tool on the server host, or save a token here.",
+            { tool: item.executable },
+          ),
+        )
+      : resolve(
+          msg(
+            "Not authenticated on this server. Sign in with the {tool} tool on the server host.",
+            {
+              tool: item.executable,
+            },
+          ),
+        );
   }
   return resolve(
     msg("Could not verify {provider}. {detail}", {
@@ -159,7 +172,7 @@ function EnvironmentProviders(props: {
             description={sourceControlProviderSummary(item, messages)}
             ready={sourceControlProviderReady(item)}
             separated={index > 0}
-            {...(definition?.credentials || definition?.settings
+            {...(hasMobileCredentialsForm(definition)
               ? {
                   onPress: () =>
                     navigation.navigate("SettingsSourceControlProvider", {
@@ -326,32 +339,6 @@ export function SourceControlTokenForm(props: {
       </View>
     </View>
   );
-}
-
-type HostSettings = NonNullable<SourceControlDefinition["settings"]>;
-
-/** The fields a host declares, in its own order, with what its schema says about each. */
-function hostSettingsFields(settings: HostSettings) {
-  const order = Schema.resolveAnnotations(settings)?.providerSettingsFormSchema?.order ?? [];
-  const position = (key: string) => (order.includes(key) ? order.indexOf(key) : order.length);
-  return Object.keys(settings.fields)
-    .sort((left, right) => position(left) - position(right))
-    .flatMap((key) => {
-      const field = settings.fields[key]!;
-      const annotations = Schema.resolveAnnotationsKey(field) ?? Schema.resolveAnnotations(field);
-      const form = annotations?.providerSettingsForm ?? {};
-      if (form.hidden) return [];
-      return [
-        {
-          key,
-          label: typeof annotations?.title === "string" ? annotations.title : key,
-          description:
-            typeof annotations?.description === "string" ? annotations.description : undefined,
-          placeholder: form.placeholder,
-          secret: form.control === "password",
-        },
-      ];
-    });
 }
 
 /** Credentials for a host that names its own fields rather than one token per host. */

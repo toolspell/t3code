@@ -5210,6 +5210,7 @@
   "431d136c241a7098": "Verfügbar. {hint}",
   "616657863f82bc31": "Alle {provider}-Hosts sind ausgeschaltet.",
   "fc5c150f6f35eb7f": "Auf diesem Server nicht authentifiziert. Melde dich mit dem Tool {tool} auf dem Server-Host an oder speichere hier ein Token.",
+  "33aad5b55091c706": "Auf diesem Server nicht authentifiziert. Melde dich mit dem Tool {tool} auf dem Server-Host an.",
   "52658eebf5ac80ab": "{provider} konnte nicht überprüft werden. {detail}",
   "55e008c7335ccee3": "Versionskontrollanbieter · {environment}",
   "3bd42b40bd62ca11": "Versionskontrollanbieter",

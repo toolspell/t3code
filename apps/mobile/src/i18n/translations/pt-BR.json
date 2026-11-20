@@ -5204,6 +5204,7 @@
   "431d136c241a7098": "Disponível. {hint}",
   "616657863f82bc31": "Todos os hosts do {provider} estão desativados.",
   "fc5c150f6f35eb7f": "Não autenticado neste servidor. Entre com a ferramenta {tool} no host do servidor ou salve um token aqui.",
+  "33aad5b55091c706": "Não autenticado neste servidor. Entre com a ferramenta {tool} no host do servidor.",
   "52658eebf5ac80ab": "Não foi possível verificar o {provider}. {detail}",
   "55e008c7335ccee3": "Provedores de controle de versão · {environment}",
   "3bd42b40bd62ca11": "Provedores de controle de versão",
