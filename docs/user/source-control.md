@@ -105,12 +105,15 @@ preserve that file.
 ### Azure DevOps
 
 T3 Code reaches Azure DevOps Services (`dev.azure.com`) with a personal access token per
-organization, or through Azure CLI for organizations without one.
+organization, or through Azure CLI for organizations without one. Azure DevOps Server 2022.1 or
+newer works with personal access tokens only, since Azure CLI does not support servers.
 
 **Personal access tokens:** open **Settings → Source control & issues**, expand **Azure DevOps**, and
 under **Personal access tokens** enter the organization (its name or any URL inside it) and a
 token. Azure DevOps no longer accepts one token for every organization, so each organization needs
-its own. Give the token these scopes:
+its own. For Azure DevOps Server, enter the collection URL instead, such as
+`https://devops.example.com/tfs/DefaultCollection`, and save a token for each collection. Give the
+token these scopes:
 
 - **Code (Read & write)** for pull requests, files, and reviews
 - **Work Items (Read & write)** for issues
@@ -132,14 +135,20 @@ az extension add --name azure-devops
 az login
 ```
 
+**Azure DevOps Server:** tokens are only sent over HTTPS, and only after the address answers as an
+Azure DevOps server. If the server uses a self-signed or company certificate, T3 Code's server
+must trust it: set `NODE_EXTRA_CA_CERTS` to the certificate's PEM file in the shell profile of the
+user running T3 Code, then restart it. Until then, the token shows **Could not check the token**.
+
 Cloning and pushing use Git's own credentials for Azure DevOps, such as an SSH key or a credential
 helper, not the personal access token.
 
-To name reviewers or assignees, use an email address or a name that matches one person. A name
+To name reviewers or assignees, use an email address or a name that matches one person. On Azure
+DevOps Server, where accounts often have no email, use the account as `DOMAIN\account`. A name
 that matches several people is refused with the candidates listed.
 
-**Publish Repository** asks which organization to create the repository in when tokens are saved,
-offering the organizations whose token works. Enter the repository as `project/repository`.
+**Publish Repository** asks which organization or collection to create the repository in when
+tokens are saved, offering those whose token works. Enter the repository as `project/repository`.
 Without a saved token, Azure CLI's default organization is used.
 
 ### GitCafe
