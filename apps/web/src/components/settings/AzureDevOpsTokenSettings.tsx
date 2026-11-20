@@ -22,11 +22,11 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import {
   azureDevOpsNewTokenUrl,
-  checkAzureDevOpsPat,
-  fakeAzureDevOpsState,
+  AZURE_DEVOPS_SCOPE_NAMES,
+  azureDevOpsTokenCheck,
   normalizeAzureDevOpsOrganizationUrl,
   savedAzureDevOpsOrganizations,
-  type AzureDevOpsPatCheck,
+  type AzureDevOpsTokenCheck,
 } from "./AzureDevOpsTokenSettings.logic";
 import { SecretSourceInput, useSecretSources } from "./SecretSourceInput";
 import { RedactedLogin } from "./SourceControlAccountSettings";
@@ -48,11 +48,9 @@ export function AzureDevOpsTokenSettings({
   readonly onSaved: () => void;
 }) {
   const gt = useGT();
-  const savedTokens = useEnvironmentSettings(environmentId, (settings) =>
+  const { tokens } = useEnvironmentSettings(environmentId, (settings) =>
     readHostCredentialSettings(settings, definition.kind),
-  ).tokens;
-  // FAKE: screenshot states, revert before commit.
-  const tokens = (fakeAzureDevOpsState()?.tokens ?? savedTokens) as typeof savedTokens;
+  );
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: `save ${definition.label} token`,
   });
@@ -164,8 +162,9 @@ export function AzureDevOpsTokenSettings({
             <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">
               <T>
                 A token saved for an organization is used instead of the Azure CLI login. Each
-                organization needs its own token. Give it read and write access to Code and Work
-                Items.
+                organization needs its own token. Give it Code (Read &amp; write), Work Items (Read
+                &amp; write), Identity (Read), and Project and Team (Read). Publishing a new
+                repository also needs Code (Read, write, &amp; manage).
               </T>{" "}
               {organizationUrl !== null ? (
                 <InlineButton
@@ -247,7 +246,7 @@ export function AzureDevOpsTokenSettings({
                   {saved.replace(/^https:\/\//u, "")}
                 </p>
                 <PatCheckLine
-                  check={checkAzureDevOpsPat(saved)}
+                  check={azureDevOpsTokenCheck(auth, saved)}
                   fromSecretProvider={isSecretReference(tokens[saved])}
                   revealed={revealed}
                   onToggleRevealed={() => setRevealed((current) => !current)}
@@ -288,7 +287,7 @@ function PatCheckLine({
   revealed,
   onToggleRevealed,
 }: {
-  readonly check: AzureDevOpsPatCheck;
+  readonly check: AzureDevOpsTokenCheck;
   readonly fromSecretProvider: boolean;
   readonly revealed: boolean;
   readonly onToggleRevealed: () => void;
@@ -299,37 +298,61 @@ function PatCheckLine({
       · <T>From a secret provider</T>
     </span>
   ) : null;
+  const scopeNames = (scopes: ReadonlyArray<string>) =>
+    scopes.map((scope) => AZURE_DEVOPS_SCOPE_NAMES[scope] ?? scope).join(", ");
   if (check.status === "valid") {
     return (
-      <div className="flex min-w-0 items-center gap-1 text-2xs text-muted-foreground">
-        <span>
-          <T>Signed in as</T>
-        </span>
-        <RedactedLogin revealed={revealed} account={check.account} />
-        <Button
-          size="icon-xs"
-          variant="ghost-muted"
-          onClick={onToggleRevealed}
-          aria-label={
-            revealed
-              ? gt("Hide {label} accounts", { label: "Azure DevOps" })
-              : gt("Reveal {label} accounts", { label: "Azure DevOps" })
-          }
-          aria-pressed={revealed}
-        >
-          {revealed ? <EyeOffIcon /> : <EyeIcon />}
-        </Button>
-        {source}
+      <div className="grid min-w-0 gap-0.5 text-2xs text-muted-foreground">
+        <div className="flex min-w-0 items-center gap-1">
+          <span>
+            <T>Signed in as</T>
+          </span>
+          <RedactedLogin revealed={revealed} account={check.account} />
+          <Button
+            size="icon-xs"
+            variant="ghost-muted"
+            onClick={onToggleRevealed}
+            aria-label={
+              revealed
+                ? gt("Hide {label} accounts", { label: "Azure DevOps" })
+                : gt("Reveal {label} accounts", { label: "Azure DevOps" })
+            }
+            aria-pressed={revealed}
+          >
+            {revealed ? <EyeOffIcon /> : <EyeIcon />}
+          </Button>
+          {source}
+        </div>
+        {check.missingScopes.length > 0 ? (
+          <p>
+            {gt("Missing scopes: {scopes}. Features that need them won't work.", {
+              scopes: scopeNames(check.missingScopes),
+            })}
+          </p>
+        ) : null}
       </div>
     );
   }
   return (
     <p className="flex min-w-0 items-center gap-1 text-2xs text-muted-foreground">
-      {check.status === "rejected" ? (
-        <T>Token rejected. Replace it with a new token.</T>
-      ) : (
-        <T>Could not check the token.</T>
-      )}
+      <span>
+        {check.status === "rejected"
+          ? gt("Token rejected. Replace it with a new token.")
+          : check.status === "missing-scopes"
+            ? gt("Missing scopes: {scopes}. Replace the token with one that has them.", {
+                scopes: scopeNames(check.scopes),
+              })
+            : check.status === "unsupported-version"
+              ? gt(
+                  "This server offers REST API {version}; T3 Code needs 7.1 (Azure DevOps Server 2022.1 or newer).",
+                  { version: check.version },
+                )
+              : check.status === "secret-unresolved"
+                ? gt("Could not read the token from its secret provider.")
+                : check.status === "not-checked"
+                  ? gt("Not checked yet.")
+                  : gt("Could not check the token.")}
+      </span>
       {source}
     </p>
   );

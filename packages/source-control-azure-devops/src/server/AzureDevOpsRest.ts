@@ -68,7 +68,7 @@ export interface AzureDevOpsRestRequest {
   readonly organizationUrl: string;
   readonly token: Redacted.Redacted<string>;
   readonly operation: string;
-  readonly method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  readonly method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
   /**
    * A resource area Azure DevOps Services may serve from another host, such as `ims` on
    * `vssps.dev.azure.com`. Areas the organization does not list resolve to the organization URL.

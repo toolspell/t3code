@@ -1,19 +1,30 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { requireSettingsSecretLiteral, SourceControlProviderKind } from "@t3tools/contracts";
+import { readSourceControlHostSettings } from "@t3tools/source-control-core/shared/definition";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import { SourceControlProviderError, type ChangeRequest } from "@t3tools/contracts";
 
 import * as AzureDevOpsChangeRequestTemplate from "./azureDevOpsChangeRequestTemplate.ts";
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
+import * as AzureDevOpsClient from "../shared/definition.ts";
 import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
+import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
+import {
+  checkOrganizationToken,
+  unresolvedSecretAccount,
+  withTokenAccounts,
+} from "./azureDevOpsTokenCheck.ts";
 import type { NormalizedAzureDevOpsPullRequestRecord } from "./azureDevOpsPullRequests.ts";
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
 import {
   combinedAuthOutput,
   firstSafeAuthLine,
+  probeSourceControlProvider,
   providerAuth,
   type SourceControlAuthProbeInput,
   type SourceControlCliDiscoverySpec,
+  type SourceControlManagedCliDiscoverySpec,
 } from "@t3tools/source-control-core/server/discovery";
 
 function parseAzureAuth(input: SourceControlAuthProbeInput) {
@@ -54,6 +65,56 @@ export const discovery = {
   parseAuth: parseAzureAuth,
   installHint: "Install the Azure command-line tools (`az`) or configure a PAT.",
 } satisfies SourceControlCliDiscoverySpec;
+
+/** The `az` probe plus a check of every organization's saved personal access token. */
+export const makeDiscovery = Effect.gen(function* () {
+  const host = yield* SourceControlHost.SourceControlHost;
+  const rest = yield* AzureDevOpsRest.AzureDevOpsRest;
+
+  const tokenAccounts = Effect.gen(function* () {
+    const current = yield* host.settings
+      .getWithSecrets(AzureDevOpsClient.definition.kind)
+      .pipe(Effect.option);
+    if (Option.isNone(current)) return [];
+    const { tokens } = readSourceControlHostSettings(
+      AzureDevOpsClient.settings,
+      current.value.sourceControlHosts[AzureDevOpsClient.definition.kind],
+    );
+    const saved = Object.entries(tokens).filter(([, value]) =>
+      typeof value === "string" ? value.trim() !== "" : value !== undefined,
+    );
+    return yield* Effect.forEach(
+      saved,
+      ([organizationUrl, value]) =>
+        requireSettingsSecretLiteral(value, current.value.secretProviders).pipe(
+          Effect.matchEffect({
+            onFailure: () => Effect.succeed(unresolvedSecretAccount(organizationUrl)),
+            onSuccess: (token) => checkOrganizationToken(organizationUrl, Redacted.make(token)),
+          }),
+        ),
+      { concurrency: 4 },
+    );
+  }).pipe(Effect.provideService(AzureDevOpsRest.AzureDevOpsRest, rest));
+
+  return {
+    type: "managed-cli",
+    kind: discovery.kind,
+    label: discovery.label,
+    installHint: discovery.installHint,
+    probe: Effect.fn("AzureDevOpsSourceControlProvider.discovery")(function* (cwd: string) {
+      const [cli, accounts] = yield* Effect.all(
+        [
+          probeSourceControlProvider({ cwd, process: host.process, spec: discovery }),
+          tokenAccounts,
+        ],
+        { concurrency: "unbounded" },
+      );
+      return withTokenAccounts(cli, accounts);
+    }),
+    // `az` scopes its commands from the remote itself; it claims no unknown hosts.
+    refineUnknownRemote: () => Effect.succeed(null),
+  } satisfies SourceControlManagedCliDiscoverySpec;
+});
 
 /**
  * The repository name a remote ends in; `az` takes it decoded and finds org and project itself.

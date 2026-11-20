@@ -37,7 +37,7 @@ import { m, type MessageResolver } from "../../i18n/messages";
 
 import { GitIcon, JujutsuIcon, type Icon } from "../Icons";
 import { AzureDevOpsTokenSettings } from "./AzureDevOpsTokenSettings";
-import { fakeAzureDevOpsState, withAzureDevOpsPatAuth } from "./AzureDevOpsTokenSettings.logic";
+import { withAzureDevOpsTokenDetail } from "./AzureDevOpsTokenSettings.logic";
 import { IssueTrackerSettings } from "./IssueTrackerSettings";
 import { SourceControlHostSettings } from "./SourceControlHostSettings";
 import { SourceControlAccountSettings } from "./SourceControlAccountSettings";
@@ -55,10 +55,7 @@ import { useSearchableSetting, sourceControlHostSettingsSearchId } from "./setti
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { sourceControlInstallHintText } from "@t3tools/client-runtime/contract-labels";
 import { isSourceControlProviderOffered } from "@t3tools/client-runtime/operations/projects";
-import {
-  readHostCredentialSettings,
-  sourceControlClients,
-} from "@t3tools/client-runtime/source-control-clients";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { sourceControlIcon } from "~/sourceControlPresentation";
 
 const EMPTY_DISCOVERY_RESULT: SourceControlDiscoveryResult = {
@@ -501,10 +498,6 @@ export function SourceControlSettingsPanel() {
     },
   );
   const offeredProviders = environment?.serverConfig?.settings.offeredSourceControlProviders;
-  const azureDevOpsTokens = environment?.serverConfig?.settings
-    ? (fakeAzureDevOpsState()?.tokens ??
-      readHostCredentialSettings(environment.serverConfig.settings, "azure-devops").tokens)
-    : {};
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: "save source control providers",
   });
@@ -524,7 +517,7 @@ export function SourceControlSettingsPanel() {
             definition={definition}
             auth={item.auth}
             cliVersion={Option.getOrNull(item.version)}
-            cliInstalled={item.status === "available"}
+            cliInstalled={Option.isSome(item.version)}
             onSaved={handleScan}
           />
         </SettingsSearchTarget>
@@ -650,66 +643,34 @@ export function SourceControlSettingsPanel() {
               }
               headerAction={hasVersionControlSystems ? null : scanButton}
             >
-              {/* FAKE: screenshot states, revert before commit */}
-              {result.sourceControlProviders
-                .map((item) => {
-                  const fake = fakeAzureDevOpsState();
-                  if (item.kind !== "azure-devops" || fake === null) return item;
-                  if (fake.cli === "signedIn") {
-                    return {
-                      ...item,
-                      status: "available" as const,
-                      version: Option.some("azure-cli 2.93.0"),
-                      auth: {
-                        ...item.auth,
-                        status: "authenticated" as const,
-                        account: Option.some("jane.doe@contoso.com"),
-                      },
-                    };
+              {result.sourceControlProviders.map((item) => (
+                <DiscoveryItemRow
+                  key={`provider:${item.kind}`}
+                  item={
+                    item.kind === "azure-devops"
+                      ? withAzureDevOpsTokenDetail(item, (count) =>
+                          gt(
+                            "{count, plural, one {Personal access token for {count} organization} other {Personal access tokens for {count} organizations}}",
+                            { count },
+                          ),
+                        )
+                      : item
                   }
-                  return {
-                    ...item,
-                    status: fake.cli === "missing" ? ("missing" as const) : ("available" as const),
-                    version:
-                      fake.cli === "missing" ? Option.none() : Option.some("azure-cli 2.93.0"),
-                    auth: {
-                      ...item.auth,
-                      status:
-                        fake.cli === "missing"
-                          ? ("unknown" as const)
-                          : ("unauthenticated" as const),
-                      account: Option.none(),
-                    },
-                  };
-                })
-                .map((item) => (
-                  <DiscoveryItemRow
-                    key={`provider:${item.kind}`}
-                    item={
-                      item.kind === "azure-devops"
-                        ? withAzureDevOpsPatAuth(item, azureDevOpsTokens, (count) =>
-                            gt(
-                              "{count, plural, one {Personal access token for {count} organization} other {Personal access tokens for {count} organizations}}",
-                              { count },
-                            ),
-                          )
-                        : item
-                    }
-                    offered={{
-                      checked: isSourceControlProviderOffered(offeredProviders, item.kind),
-                      disabled: !canUpdateSettings,
-                      onChange: (checked) =>
-                        void updateSettings({
-                          environmentId,
-                          input: {
-                            patch: { offeredSourceControlProviders: { [item.kind]: checked } },
-                          },
-                        }),
-                    }}
-                  >
-                    {hostSettingsPanel(item)}
-                  </DiscoveryItemRow>
-                ))}
+                  offered={{
+                    checked: isSourceControlProviderOffered(offeredProviders, item.kind),
+                    disabled: !canUpdateSettings,
+                    onChange: (checked) =>
+                      void updateSettings({
+                        environmentId,
+                        input: {
+                          patch: { offeredSourceControlProviders: { [item.kind]: checked } },
+                        },
+                      }),
+                  }}
+                >
+                  {hostSettingsPanel(item)}
+                </DiscoveryItemRow>
+              ))}
             </SettingsSection>
           ) : null}
         </>

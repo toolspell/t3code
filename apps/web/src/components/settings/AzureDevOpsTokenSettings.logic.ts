@@ -31,22 +31,6 @@ export function azureDevOpsNewTokenUrl(organizationUrl: string): string {
   return `${organizationUrl}/_usersSettings/tokens`;
 }
 
-export type AzureDevOpsPatCheck =
-  | { readonly status: "valid"; readonly account: string }
-  | { readonly status: "rejected" }
-  | { readonly status: "unknown" };
-
-/**
- * MOCK until the server checks saved tokens: an organization named `invalid…` is rejected and one
- * named `offline…` cannot be reached; every other token passes.
- */
-export function checkAzureDevOpsPat(organizationUrl: string): AzureDevOpsPatCheck {
-  const organization = organizationUrl.split("/").at(-1) ?? "";
-  if (organization.startsWith("invalid")) return { status: "rejected" };
-  if (organization.startsWith("offline")) return { status: "unknown" };
-  return { status: "valid", account: `mock.user@${organization}.example` };
-}
-
 /** The organizations with a saved token, sorted. */
 export function savedAzureDevOpsOrganizations(tokens: Readonly<Record<string, unknown>>) {
   return Object.entries(tokens)
@@ -55,46 +39,54 @@ export function savedAzureDevOpsOrganizations(tokens: Readonly<Record<string, un
     .toSorted();
 }
 
-/**
- * The discovery item the header shows: a working token makes Azure DevOps usable even when the
- * `az` login is missing or signed out.
- */
-export function withAzureDevOpsPatAuth<
-  Item extends {
-    readonly status: "available" | "missing";
-    readonly auth: SourceControlProviderAuth;
-  },
->(
-  item: Item,
-  tokens: Readonly<Record<string, unknown>>,
-  describe: (workingTokens: number) => string,
-): Item {
-  if (item.auth.status === "authenticated") return item;
-  const working = savedAzureDevOpsOrganizations(tokens).filter(
-    (organization) => checkAzureDevOpsPat(organization).status === "valid",
-  ).length;
-  if (working === 0) return item;
-  return {
-    ...item,
-    status: "available",
-    auth: {
-      status: "authenticated",
-      account: Option.none(),
-      host: Option.none(),
-      detail: Option.some(describe(working)),
-    },
-  };
+/** Scope ids the server reports, by the name Azure DevOps shows when creating a token. */
+export const AZURE_DEVOPS_SCOPE_NAMES: Readonly<Record<string, string>> = {
+  code: "Code",
+  "work-items": "Work Items",
+  identity: "Identity",
+  "project-and-team": "Project and Team",
+};
+
+export type AzureDevOpsTokenCheck =
+  | {
+      readonly status: "valid";
+      readonly account: string;
+      readonly missingScopes: ReadonlyArray<string>;
+    }
+  | { readonly status: "missing-scopes"; readonly scopes: ReadonlyArray<string> }
+  | { readonly status: "unsupported-version"; readonly version: string }
+  | { readonly status: "rejected" | "secret-unresolved" | "unreachable" | "not-checked" };
+
+/** The server's check of one organization's token, from the discovery item's accounts. */
+export function azureDevOpsTokenCheck(
+  auth: SourceControlProviderAuth,
+  organizationUrl: string,
+): AzureDevOpsTokenCheck {
+  const entry = auth.accounts?.find(
+    (account) => account.host.toLowerCase() === organizationUrl.toLowerCase(),
+  );
+  if (entry === undefined) return { status: "not-checked" };
+  const separator = (entry.error ?? "").indexOf(":");
+  const code = separator === -1 ? (entry.error ?? "") : entry.error!.slice(0, separator);
+  const value = separator === -1 ? "" : entry.error!.slice(separator + 1);
+  const scopes = code === "missing-scopes" ? value.split(",").filter(Boolean) : [];
+  if (entry.authenticated) {
+    return { status: "valid", account: entry.account, missingScopes: scopes };
+  }
+  if (code === "missing-scopes") return { status: "missing-scopes", scopes };
+  if (code === "unsupported-version") return { status: "unsupported-version", version: value };
+  if (code === "rejected" || code === "secret-unresolved") return { status: code };
+  return { status: "unreachable" };
 }
 
-// FAKE: screenshot states driven by localStorage `azfake`, remove before commit.
-export function fakeAzureDevOpsState(): {
-  readonly cli: "signedIn" | "signedOut" | "missing";
-  readonly tokens: Readonly<Record<string, unknown>>;
-} | null {
-  try {
-    const raw = globalThis.localStorage?.getItem("azfake");
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
+/**
+ * Names the tokens in the header when they, not the `az` login, sign Azure DevOps in.
+ */
+export function withAzureDevOpsTokenDetail<
+  Item extends { readonly auth: SourceControlProviderAuth },
+>(item: Item, describe: (workingTokens: number) => string): Item {
+  if (item.auth.status !== "authenticated" || Option.isSome(item.auth.account)) return item;
+  const working = item.auth.accounts?.filter((account) => account.authenticated).length ?? 0;
+  if (working === 0) return item;
+  return { ...item, auth: { ...item.auth, detail: Option.some(describe(working)) } };
 }

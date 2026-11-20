@@ -11,13 +11,17 @@ import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
 import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
 import * as AzureDevOpsIssueTracker from "./AzureDevOpsIssueTracker.ts";
 import * as AzureDevOpsPullRequestProvider from "./AzureDevOpsPullRequestProvider.ts";
+import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
 import * as AzureDevOpsSourceControlProvider from "./AzureDevOpsSourceControlProvider.ts";
 
-const services = AzureDevOpsPullRequestCli.layer.pipe(Layer.provideMerge(AzureDevOpsCli.layer));
+const services = AzureDevOpsPullRequestCli.layer.pipe(
+  Layer.provideMerge(AzureDevOpsCli.layer),
+  Layer.provideMerge(AzureDevOpsRest.layer),
+);
 
 const makeInstance = Effect.all({
   sourceControl: AzureDevOpsSourceControlProvider.make,
-  discovery: Effect.succeed(AzureDevOpsSourceControlProvider.discovery),
+  discovery: AzureDevOpsSourceControlProvider.makeDiscovery,
   pullRequests: AzureDevOpsPullRequestProvider.make,
   issues: AzureDevOpsIssueTracker.make,
 });

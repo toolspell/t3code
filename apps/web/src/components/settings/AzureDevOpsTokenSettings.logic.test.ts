@@ -2,8 +2,9 @@ import * as Option from "effect/Option";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  azureDevOpsTokenCheck,
   normalizeAzureDevOpsOrganizationUrl,
-  withAzureDevOpsPatAuth,
+  withAzureDevOpsTokenDetail,
 } from "./AzureDevOpsTokenSettings.logic";
 
 describe("normalizeAzureDevOpsOrganizationUrl", () => {
@@ -25,51 +26,88 @@ describe("normalizeAzureDevOpsOrganizationUrl", () => {
   );
 });
 
-describe("withAzureDevOpsPatAuth", () => {
-  const summary = (count: number) => `${count} tokens`;
-  const signedOut = {
-    status: "missing" as const,
-    auth: {
-      status: "unauthenticated" as const,
-      account: Option.none(),
-      host: Option.none(),
-      detail: Option.none(),
-    },
-  };
-  const signedIn = {
-    status: "available" as const,
-    auth: { ...signedOut.auth, status: "authenticated" as const, account: Option.some("az-user") },
-  };
+const ORGANIZATION = "https://dev.azure.com/contoso";
+const account = (fields: { readonly authenticated: boolean; readonly error?: string }) => ({
+  host: ORGANIZATION,
+  account: "Sabine Test",
+  active: false,
+  ...fields,
+});
+const auth = (
+  status: "authenticated" | "unauthenticated",
+  accounts: ReadonlyArray<ReturnType<typeof account>>,
+  signedInAs?: string,
+) => ({
+  status,
+  account: signedInAs === undefined ? Option.none<string>() : Option.some(signedInAs),
+  host: Option.none<string>(),
+  detail: Option.none<string>(),
+  accounts,
+});
 
-  it("keeps the az login when it is signed in", () => {
-    expect(
-      withAzureDevOpsPatAuth(signedIn, { "https://dev.azure.com/contoso": "pat" }, summary),
-    ).toBe(signedIn);
-  });
-
-  it("is usable and authenticated with one working token", () => {
-    const item = withAzureDevOpsPatAuth(
-      signedOut,
-      {
-        "https://dev.azure.com/invalid-org": "pat",
-        "https://dev.azure.com/contoso": "pat",
-        "https://dev.azure.com/fabrikam": "pat",
-      },
-      summary,
-    );
-    expect(item.status).toBe("available");
-    expect(item.auth.status).toBe("authenticated");
-    expect(item.auth.detail).toEqual(Option.some("2 tokens"));
-  });
-
+describe("azureDevOpsTokenCheck", () => {
   it.each([
-    ["no tokens", {}],
-    ["only removed tokens", { "https://dev.azure.com/contoso": "" }],
     [
-      "only rejected or unchecked tokens",
-      { "https://dev.azure.com/invalid-org": "pat", "https://dev.azure.com/offline-org": "pat" },
+      account({ authenticated: true }),
+      { status: "valid", account: "Sabine Test", missingScopes: [] },
     ],
-  ])("stays signed out with %s", (_, tokens) => {
-    expect(withAzureDevOpsPatAuth(signedOut, tokens, summary)).toBe(signedOut);
+    [
+      account({ authenticated: true, error: "missing-scopes:work-items,identity" }),
+      { status: "valid", account: "Sabine Test", missingScopes: ["work-items", "identity"] },
+    ],
+    [
+      account({ authenticated: false, error: "missing-scopes:code" }),
+      { status: "missing-scopes", scopes: ["code"] },
+    ],
+    [
+      account({ authenticated: false, error: "unsupported-version:7.0" }),
+      { status: "unsupported-version", version: "7.0" },
+    ],
+    [account({ authenticated: false, error: "rejected" }), { status: "rejected" }],
+    [
+      account({ authenticated: false, error: "secret-unresolved" }),
+      { status: "secret-unresolved" },
+    ],
+    [account({ authenticated: false, error: "unreachable" }), { status: "unreachable" }],
+  ])("reads %j", (entry, expected) => {
+    expect(
+      azureDevOpsTokenCheck(auth("unauthenticated", [entry]), "https://dev.azure.com/Contoso"),
+    ).toEqual(expected);
+  });
+
+  it("reports an organization the server has not checked yet", () => {
+    expect(
+      azureDevOpsTokenCheck(auth("unauthenticated", []), "https://dev.azure.com/fabrikam"),
+    ).toEqual({
+      status: "not-checked",
+    });
+  });
+});
+
+describe("withAzureDevOpsTokenDetail", () => {
+  const describeTokens = (count: number) => `${count} tokens`;
+
+  it("names the tokens when they, not az, sign in", () => {
+    const item = {
+      auth: auth("authenticated", [
+        account({ authenticated: true }),
+        {
+          ...account({ authenticated: false, error: "rejected" }),
+          host: "https://dev.azure.com/other",
+        },
+      ]),
+    };
+    expect(withAzureDevOpsTokenDetail(item, describeTokens).auth.detail).toEqual(
+      Option.some("1 tokens"),
+    );
+  });
+
+  it("keeps the az account and a signed-out state as they are", () => {
+    const signedIn = { auth: auth("authenticated", [account({ authenticated: true })], "az user") };
+    const signedOut = {
+      auth: auth("unauthenticated", [account({ authenticated: false, error: "rejected" })]),
+    };
+    expect(withAzureDevOpsTokenDetail(signedIn, describeTokens)).toBe(signedIn);
+    expect(withAzureDevOpsTokenDetail(signedOut, describeTokens)).toBe(signedOut);
   });
 });
