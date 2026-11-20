@@ -683,11 +683,40 @@ describe("AzureDevOpsApi over REST", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect(
-    "creates a repository in the chosen organization with that organization's token",
-    () => {
+  // The web dialog sends `{namespace}/{project}/{name}`; a collection's namespace names its server.
+  it.effect.each([
+    {
+      repository: "Fabrikam/Other Project/repo",
+      base: "https://dev.azure.com/fabrikam",
+      token: "fabrikam-pat",
+      name: "repo",
+      remoteUrl: repository.remoteUrl,
+      url: repository.remoteUrl,
+    },
+    {
+      repository: "ado.example/second collection/Other Project/My Repo",
+      base: "https://ado.example/second%20collection",
+      token: "second-pat",
+      name: "My Repo",
+      // Azure DevOps Server answers the space literally, which git cannot clone from.
+      remoteUrl: "https://ado.example/Second Collection/Other Project/_git/My Repo",
+      url: "https://ado.example/Second%20Collection/Other%20Project/_git/My%20Repo",
+    },
+    {
+      repository: "ado.example:8443/tfs/Coll/Other Project/repo",
+      base: "https://ado.example:8443/tfs/coll",
+      token: "tfs-pat",
+      name: "repo",
+      remoteUrl: "https://ado.example:8443/tfs/Coll/Other%20Project/_git/repo",
+      url: "https://ado.example:8443/tfs/Coll/Other%20Project/_git/repo",
+    },
+  ])(
+    "creates $repository in the chosen organization or collection with its token",
+    ({ repository: specifier, base, token, name, remoteUrl, url }) => {
       const { requests, az, layer } = routed((request) =>
-        request.method === "GET" ? Response.json({ id: "project-id" }) : Response.json(repository),
+        request.method === "GET"
+          ? Response.json({ id: "project-id" })
+          : Response.json({ ...repository, name, remoteUrl }),
       );
       return Effect.gen(function* () {
         yield* TestSourceControlHost.TestSourceControlHostSettings.use((settings) =>
@@ -697,6 +726,8 @@ describe("AzureDevOpsApi over REST", () => {
                 tokens: {
                   "https://dev.azure.com/contoso": "contoso-pat",
                   "https://dev.azure.com/fabrikam": "fabrikam-pat",
+                  "https://ado.example/Second%20Collection": "second-pat",
+                  "https://ado.example:8443/tfs/coll": "tfs-pat",
                 },
               },
             },
@@ -705,28 +736,72 @@ describe("AzureDevOpsApi over REST", () => {
         const cli = yield* AzureDevOpsApi.AzureDevOpsApi;
 
         // The checkout's remote is in contoso; the chosen organization decides.
-        yield* cli.createRepository({
+        const urls = yield* cli.createRepository({
           cwd: "/w",
-          repository: "Fabrikam/Other Project/repo",
+          repository: specifier,
           visibility: "private",
         });
 
         expect(az).not.toHaveBeenCalled();
         assert.deepStrictEqual(
-          requests.map((request) => [request.method, new URL(request.url).pathname]),
+          requests.map((request) => [request.method, request.url.split("?")[0]]),
           [
-            ["GET", "/fabrikam/_apis/projects/Other%20Project"],
-            ["POST", "/fabrikam/Other%20Project/_apis/git/repositories"],
+            ["GET", `${base}/_apis/projects/Other%20Project`],
+            ["POST", `${base}/Other%20Project/_apis/git/repositories`],
           ],
         );
-        const fabrikamAuth = `Basic ${Buffer.from(":fabrikam-pat").toString("base64")}`;
+        expect(bodyOf(requests[1])).toEqual({ name, project: { id: "project-id" } });
+        const auth = `Basic ${Buffer.from(`:${token}`).toString("base64")}`;
         assert.deepStrictEqual(
           requests.map((request) => request.headers.authorization),
-          [fabrikamAuth, fabrikamAuth],
+          [auth, auth],
         );
+        assert.strictEqual(urls.url, url);
       }).pipe(Effect.provide(layer));
     },
   );
+
+  it.effect("never hands a server's collection to az, with or without a saved token", () => {
+    const { requests, az, layer } = routed(() => Response.json({}));
+    return Effect.gen(function* () {
+      const cli = yield* AzureDevOpsApi.AzureDevOpsApi;
+      for (const args of [
+        ["boards", "work-item", "show", "--organization", "https://ado.example/Second Collection"],
+        ["boards", "query", "--org=http://ado.example/DefaultCollection"],
+      ]) {
+        const error = yield* Effect.flip(cli.execute({ cwd: "/w", args }));
+        assert.strictEqual(error._tag, "AzureDevOpsTokenRequiredError", args.join(" "));
+      }
+      // Without a token for its collection, a server's checkout is refused before az runs.
+      const created = yield* Effect.flip(
+        cli.createRepository({
+          cwd: "/w",
+          repository: "ado.example/Second Collection/Other Project/repo",
+          visibility: "private",
+        }),
+      );
+      assert.strictEqual(created._tag, "AzureDevOpsTokenRequiredError");
+      // A command naming no organization, such as the viewer's, answers for the checkout's.
+      for (const args of [
+        ["repos", "pr", "list", "--detect", "true"],
+        ["account", "show"],
+      ]) {
+        const scoped = yield* Effect.flip(
+          cli.execute({
+            cwd: "/w",
+            remoteUrl: "ssh://ado.example:2222/DefaultCollection/web/_git/app",
+            args,
+          }),
+        );
+        assert.strictEqual(scoped._tag, "AzureDevOpsTokenRequiredError", args.join(" "));
+        if (scoped._tag === "AzureDevOpsTokenRequiredError") {
+          assert.strictEqual(scoped.organizationUrl, "https://ado.example/defaultcollection");
+        }
+      }
+      expect(az).not.toHaveBeenCalled();
+      expect(requests).toEqual([]);
+    }).pipe(Effect.provide(layer));
+  });
 });
 
 describe("azureCliInvocation", () => {

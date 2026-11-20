@@ -115,6 +115,22 @@ describe("Azure DevOps change request URLs", () => {
     );
   });
 
+  // `az` refuses Azure DevOps Server, so a server's pull request is checked out with git.
+  it.each([
+    ["https://dev.azure.com/acme/web/_git/app", "feature/x", "az repos pr checkout --id 7"],
+    [undefined, "feature/x", "az repos pr checkout --id 7"],
+    [
+      "https://ado.example/Second%20Collection/web/_git/app",
+      "feature/x",
+      "git fetch origin feature/x && git switch feature/x",
+    ],
+    ["https://ado.example/Coll/web/_git/app", "", null],
+    ["https://ado.example/Coll/web/_git/app", "x;rm -rf ~", null],
+    ["https://ado.example/Coll/web/_git/app", "--upload-pack=x", null],
+  ])("checks out a pull request in %s from %j with %j", (repositoryUrl, headBranch, command) => {
+    expect(definition.checkoutCommand({ number: 7, headBranch, repositoryUrl })).toBe(command);
+  });
+
   it.each([
     ["ssh.dev.azure.com/v3/org-a/project/web", "git@ssh.dev.azure.com:v3/org-a/project/web"],
     [
@@ -484,15 +500,72 @@ describe("Azure DevOps publish namespaces", () => {
         accounts: [
           { ...entry, host: "https://dev.azure.com/toolspell", authenticated: true },
           { ...entry, host: "https://dev.azure.com/my%20org", authenticated: true },
+          { ...entry, host: "https://ado.example/Second%20Collection", authenticated: true },
+          { ...entry, host: "https://ado.example:8443/tfs/coll", authenticated: true },
+          { ...entry, host: "https://ado.example/locked", authenticated: false },
           {
             ...entry,
             host: "https://dev.azure.com/contoso-demo",
             authenticated: false,
             error: "rejected",
           },
-          { ...entry, host: "https://tfs.example.test/collection", authenticated: true },
         ],
       }),
-    ).toEqual(["toolspell", "my org"]);
+      // An organization name cannot hold a space, so no token is saved under one.
+    ).toEqual(["toolspell", "ado.example/second collection", "ado.example:8443/tfs/coll"]);
+  });
+
+  it("names the host only for an organization, whose namespace leaves it out", () => {
+    expect(definition.publishHost(null, "toolspell")).toBe("dev.azure.com");
+    expect(definition.publishHost(null, null)).toBe("dev.azure.com");
+    expect(definition.publishHost(null, "ado.example/second collection")).toBeNull();
+  });
+});
+
+// Azure DevOps Server answers and git remotes spell one name every way: a literal space, `+`,
+// `%20`, a double-escaped `%2520`, and escapes in either case.
+const SPACE_SPELLINGS = [
+  ["Second Collection", "Web (EU)", "My Repo"],
+  ["Second%20Collection", "Web%20%28EU%29", "My%20Repo"],
+  ["Second+Collection", "Web+(EU)", "My+Repo"],
+  ["Second%2520Collection", "Web%2520%2528EU%2529", "My%2520Repo"],
+  ["SECOND%20collection", "web%20%28eu%29", "my%20repo"],
+] as const;
+
+describe("Azure DevOps Server names however a space is spelled", () => {
+  const registry = makeSourceControlDefinitionRegistry([definition]);
+  const kind = SourceControlProviderKind.make("azure-devops");
+  const canonicalKey = "ado.example/second%20collection/web%20(eu)/_git/my%20repo";
+
+  it.each(SPACE_SPELLINGS)("%s / %s / %s", (collection, project, repository) => {
+    const path = `${collection}/${project}/_git/${repository}`;
+    for (const remote of [`https://ado.example/${path}`, `ssh://ado.example:2222/${path}`]) {
+      expect(registry.repositoryKeyFromRemote(remote), remote).toBe(canonicalKey);
+      expect(recognizeRemoteWith(definition, remote)?.baseUrl, remote).toBe(
+        "https://ado.example/second%20collection",
+      );
+    }
+    expect(azureDevOpsOrganizationUrl(`https://ado.example/${collection}`)).toBe(
+      "https://ado.example/second%20collection",
+    );
+    expect(
+      definition.issueScope?.({ provider: kind, canonicalKey, displayName: path })?.toLowerCase(),
+    ).toBe("second collection/web (eu)");
+    const web = `https://ado.example/${path}`;
+    const link = parse(`${web}/pullrequest/3`);
+    expect(link?.repository).toBe("second%20collection/web%20(eu)/_git/my%20repo");
+    expect(
+      definition.parseCommitUrl?.(new URL(`${web}/commit/${"a".repeat(40)}`))?.repository,
+    ).toBe("second%20collection/web%20(eu)/_git/my%20repo");
+    const identity: ChangeRequestProjectIdentity = {
+      canonicalKey,
+      locator: { source: "git-remote", remoteName: "origin", remoteUrl: web },
+    };
+    expect(definition.isChangeRequestInRepository(identity, link!)).toBe(true);
+    expect(
+      definition.parseIssueUrl?.(
+        new URL(`https://ado.example/${collection}/${project}/_workitems/edit/9`),
+      ),
+    ).toEqual({ host: "ado.example", scope: "second collection/web (eu)", key: "9" });
   });
 });

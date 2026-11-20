@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 
 import type * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 
-import { azureDevOpsOrganizationUrl } from "../shared/definition.ts";
+import { azureDevOpsOrganizationUrl, azureDevOpsPathSegment } from "../shared/definition.ts";
 
 /** The remote that scopes `az` when T3 selected none, from `git remote -v` output. */
 export function primaryRemoteUrl(output: string) {
@@ -11,7 +11,8 @@ export function primaryRemoteUrl(output: string) {
   for (const line of output.split("\n")) {
     const trimmed = line.trim();
     if (trimmed.length === 0) continue;
-    const match = /^(\S+)\s+(\S+)\s+\((fetch|push)\)$/u.exec(trimmed);
+    // git prints a remote as stored, and a server's may hold a literal space.
+    const match = /^(\S+)\s+(\S.*?)\s+\((fetch|push)\)$/u.exec(trimmed);
     if (!match?.[1] || !match[2]) return null;
     if (match[3] === "fetch" && !remotes.has(match[1])) remotes.set(match[1], match[2]);
   }
@@ -39,7 +40,8 @@ export function scopeFromRemoteUrl(remote: string) {
     const services =
       legacy || url.hostname === "dev.azure.com" || url.hostname.endsWith(".dev.azure.com");
     const segments = url.pathname.slice(1).split("/");
-    const parts = segments.map(decodeURIComponent);
+    if (segments.some((segment) => /%(?![0-9a-f]{2})/iu.test(segment))) return null;
+    const parts = segments.map(azureDevOpsPathSegment);
     let organization: string | undefined;
     let server: { readonly organizationUrl: string; readonly webPortKnown: boolean } | undefined;
     if (

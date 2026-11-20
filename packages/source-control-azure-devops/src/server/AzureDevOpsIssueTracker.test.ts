@@ -558,6 +558,7 @@ interface SeenRequest {
   readonly url: URL;
   readonly contentType: string | undefined;
   readonly body: unknown;
+  readonly authorization: string | undefined;
 }
 
 const bodyOf = (request: HttpClientRequest.HttpClientRequest) =>
@@ -637,7 +638,8 @@ function restTracker(respond: (url: URL, body: unknown) => Response | undefined 
           HttpClient.make((request) => {
             const url = new URL(request.url);
             const { contentType, body } = bodyOf(request);
-            requests.push({ method: request.method, url, contentType, body });
+            const authorization = request.headers.authorization;
+            requests.push({ method: request.method, url, contentType, body, authorization });
             const response = respond(url, body) ?? restAnswer(url, body);
             return Effect.succeed(HttpClientResponse.fromWeb(request, response));
           }),
@@ -693,6 +695,99 @@ describe("AzureDevOpsIssueTracker over REST", () => {
       expect(execute).toHaveBeenCalledTimes(cliCalls);
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect(
+    "routes a server's work items by the scope's collection, however it spells a space",
+    () => {
+      // Windows users of Azure DevOps Server have no email; Azure takes `DOMAIN\account`.
+      const { requests, execute, layer, api } = restTracker((url, body) => {
+        const path = url.pathname.replace(/^\/(?:second%20collection|tfs\/coll)/u, "/acme");
+        if (path === url.pathname) return undefined;
+        if (path === "/acme/_apis/IdentityPicker/Identities") {
+          const query = (body as { query: string }).query;
+          return Response.json({
+            results: [
+              {
+                identities: ["Max", "max", "ADO2022\\max"].includes(query)
+                  ? [
+                      {
+                        localId: "max-id",
+                        displayName: "Max Beckenbach",
+                        mail: "",
+                        samAccountName: "max",
+                        scopeName: "ADO2022",
+                      },
+                    ]
+                  : [],
+              },
+            ],
+          });
+        }
+        return restAnswer(new URL(path, url), body);
+      });
+      return Effect.gen(function* () {
+        const tracker = yield* api;
+        yield* TestSourceControlHost.TestSourceControlHostSettings.use((settings) =>
+          settings.update({
+            sourceControlHosts: {
+              "azure-devops": {
+                tokens: {
+                  "https://dev.azure.com/acme": "acme-pat",
+                  "https://ado.example/Second%20Collection": "second-pat",
+                  "https://ado.example/tfs/Coll": "tfs-pat",
+                },
+              },
+            },
+          }),
+        );
+        const read = (scope: string) =>
+          tracker.getIssue({ cwd: "/w", host: "ado.example", scope, key: "7" });
+        for (const [scope, collection, token] of [
+          ["Second Collection/Web App", "/second%20collection", "second-pat"],
+          ["Second+Collection/Web+App", "/second%20collection", "second-pat"],
+          ["second%20collection/Web%20App", "/second%20collection", "second-pat"],
+          ["SECOND%2520COLLECTION/Web%2520App", "/second%20collection", "second-pat"],
+          ["tfs/Coll/Web App", "/tfs/coll", "tfs-pat"],
+          ["TFS/coll/Web%20App", "/tfs/coll", "tfs-pat"],
+        ] as const) {
+          requests.length = 0;
+          const issue = yield* read(scope);
+          assert.strictEqual(issue.key, "7", scope);
+          const item = requests.find((request) => request.url.pathname.endsWith("/workitems/7"));
+          assert.strictEqual(
+            item?.url.href.split("?")[0],
+            `https://ado.example${collection}/Web%20App/_apis/wit/workitems/7`,
+            scope,
+          );
+          assert.strictEqual(
+            item?.authorization,
+            `Basic ${Buffer.from(`:${token}`).toString("base64")}`,
+          );
+        }
+
+        const own = { cwd: "/w", host: "ado.example", scope: "Second Collection/Web App" };
+        for (const assignee of ["Max", "max", "ADO2022\\max"]) {
+          requests.length = 0;
+          yield* tracker.update!({ ...own, key: "7", assignees: [assignee] });
+          const patch = requests.find((request) => request.method === "PATCH");
+          expect(patch?.body, assignee).toEqual([
+            { op: "add", path: "/fields/System.AssignedTo", value: "ADO2022\\max" },
+          ]);
+        }
+
+        // Neither a collection without a token nor a scope missing its project reaches `az`.
+        requests.length = 0;
+        const refused = yield* Effect.flip(read("Other Collection/Web App"));
+        expect(refused.reason).toBe("unauthenticated");
+        expect(refused.detail).toBe(
+          "Azure DevOps Server needs a personal access token for ado.example/other collection; save one in Settings → Source control & issues.",
+        );
+        expect((yield* Effect.flip(read("tfs/Coll"))).reason).toBe("failed");
+        expect(requests).toEqual([]);
+        expect(execute).not.toHaveBeenCalled();
+      }).pipe(Effect.provide(layer));
+    },
+  );
 
   it.effect("lists with a WIQL query and hydrates the page in one batch", () => {
     const { requests, execute, layer, api } = restTracker((url) => {

@@ -106,7 +106,7 @@ const UNAVAILABLE_REQUIREMENT = {
     "Azure CLI (`az`) with the Azure DevOps extension is required. Install `az`, then run `az extension add --name azure-devops`.",
   // One text for both routes: the server picks it by host kind, not by the route that failed.
   unauthenticated:
-    "Azure DevOps refused the credentials. If a personal access token is saved for this organization, replace it in Settings → Source control & issues; otherwise run `az login` on the server host.",
+    "Azure DevOps has no working credentials for this repository. Save or replace a personal access token for its organization or collection in Settings → Source control & issues; for Azure DevOps Services, `az login` on the server host also works.",
 };
 
 /**
@@ -129,7 +129,12 @@ function azureDevOpsProviderFailure(
   if (error._tag === "AzureDevOpsCliAuthenticationError") return { reason: "unauthenticated" };
   if (error._tag === "AzureDevOpsCliRateLimitError") return { reason: "rate-limited" };
   if (error._tag === "AzureDevOpsPullRequestNotFoundError") return { reason: "not-found" };
-  if (error._tag === "AzureDevOpsTokenUnavailableError") return { reason: "unauthenticated" };
+  if (
+    error._tag === "AzureDevOpsTokenUnavailableError" ||
+    error._tag === "AzureDevOpsTokenRequiredError"
+  ) {
+    return { reason: "unauthenticated" };
+  }
   if (error._tag === "SourceControlRateLimitPausedError") {
     return { reason: "rate-limited", retryAt: error.retryAt };
   }

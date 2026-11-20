@@ -1,5 +1,5 @@
 import { makeProviderSettingsSchema, SourceControlProviderKind } from "@t3tools/contracts";
-import { canonicalRepositoryPath, parseGitRemoteRepository } from "@t3tools/shared/git";
+import { parseGitRemoteRepository } from "@t3tools/shared/git";
 import {
   buildCommitUrl,
   changeRequestUrlBelow,
@@ -25,6 +25,8 @@ const LEGACY_WORK_ITEM_PATH = /^\/([^/]+)\/_workitems\/edit\/(\d+)(?:\/|$)/u;
 const CHECKOUT_COMMAND = /^az\s+repos\s+pr\s+checkout\s+(.+)$/i;
 const CHANGE_REQUEST_REFERENCE =
   /^https?:\/\/[^/\s]+\/(?:[^/\s]+\/)+_git\/[^/\s]+\/pullrequest\/(\d+)(?:[/?#].*)?$/i;
+// A branch the shell passes through as written, which no option or revision syntax reads.
+const SAFE_BRANCH = /^(?!-)(?!.*\.\.)[\w./-]+$/u;
 const ORGANIZATION_NAME = /^[a-z0-9][a-z0-9-]*$/iu;
 const LEGACY_HOST = /^([a-z0-9][a-z0-9-]*)\.visualstudio\.com$/u;
 
@@ -52,6 +54,46 @@ function isServerRepositoryKey(key: string): boolean {
   const segments = key.split("/").slice(1);
   const at = segments.indexOf("_git");
   return at >= collectionLength(segments) && at === segments.length - 2;
+}
+
+/**
+ * A name segment as Azure DevOps means it. Server answers and git remotes spell a space as ` `,
+ * `+`, `%20` or even `%2520`; Azure names cannot hold `+`, and a literal `%xx` in one is misread.
+ */
+export function azureDevOpsPathSegment(segment: string): string {
+  let value = segment;
+  for (let round = 0; round < 3 && /%[0-9a-f]{2}/iu.test(value); round += 1) {
+    try {
+      value = decodeURIComponent(value);
+    } catch {
+      break;
+    }
+  }
+  return value.replaceAll("+", " ");
+}
+
+/** A path in the one lower-case spelling keys compare in, each segment escaped once. */
+function azureDevOpsCanonicalPath(path: string): string {
+  return path
+    .split("/")
+    .map((segment) =>
+      encodeURIComponent(azureDevOpsPathSegment(segment).toLowerCase()).toLowerCase(),
+    )
+    .join("/");
+}
+
+/** Whether a key from `azureDevOpsOrganizationUrl` is an Azure DevOps Services organization. */
+export function isAzureDevOpsServicesUrl(organizationUrl: string): boolean {
+  return organizationUrl.startsWith("https://dev.azure.com/");
+}
+
+/** A key from `azureDevOpsOrganizationUrl` as a person reads it: `host/path`, unescaped. */
+export function azureDevOpsOrganizationLabel(organizationUrl: string): string {
+  return organizationUrl
+    .replace(/^https:\/\//u, "")
+    .split("/")
+    .map(azureDevOpsPathSegment)
+    .join("/");
 }
 
 /**
@@ -83,7 +125,7 @@ export function azureDevOpsOrganizationUrl(input: string): string | null {
   if (collection.length < collectionLength(segments) || collection.at(-1)!.startsWith("_")) {
     return null;
   }
-  return `https://${url.host.toLowerCase()}/${canonicalRepositoryPath(collection.join("/"))}`;
+  return `https://${url.host.toLowerCase()}/${azureDevOpsCanonicalPath(collection.join("/"))}`;
 }
 
 /**
@@ -97,7 +139,8 @@ function repositoryKeyFromRemote(key: string): string | null {
     /^(ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com)\/v3\/([^/]+)\/([^/]+)\/([^/]+)$/u.exec(key);
   if (match === null) {
     // Azure takes a name as written, so its keys keep the `.git` other hosts drop.
-    return isAzureHostname(key.split("/", 1)[0]!) || isServerRepositoryKey(key) ? key : null;
+    if (isAzureHostname(key.split("/", 1)[0]!)) return key;
+    return isServerRepositoryKey(key) ? serverKey(key) : null;
   }
   const [, host, organization, project, repository] = match;
   return host === "ssh.dev.azure.com"
@@ -119,12 +162,19 @@ function canonicalRepositoryKey(key: string): string | null {
   return canonical.startsWith("dev.azure.com/") ? canonical : null;
 }
 
-function decodeUrlPathSegment(segment: string): string {
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    return segment;
-  }
+/** A server's `host/path` key with its path in the one spelling every variant shares. */
+function serverKey(key: string): string {
+  const at = key.indexOf("/");
+  return at === -1 ? key : `${key.slice(0, at)}/${azureDevOpsCanonicalPath(key.slice(at + 1))}`;
+}
+
+/** A parsed change request or commit link; a server's path is spelled like its remote's key. */
+function canonicalLink<Link extends { readonly host: string; readonly repository: string }>(
+  link: Link | null,
+): Link | null {
+  return link === null || isAzureHostname(link.host)
+    ? link
+    : { ...link, repository: azureDevOpsCanonicalPath(link.repository) };
 }
 
 function checkoutCommandId(args: string): string | null {
@@ -158,15 +208,22 @@ export const definition = defineSourceControl({
   // repository this client can act on.
   publicHost: null,
   publishDescription: "dev.azure.com",
-  publishHost: () => "dev.azure.com",
+  // A collection's namespace names its server already.
+  publishHost: (_signedInHost, namespace) => (namespace?.includes("/") ? null : "dev.azure.com"),
   newRepositoryOwner: () => null,
-  // Saved tokens are keyed `https://dev.azure.com/{organization}`; the server creates over REST there.
-  // Only organizations whose saved token passed the check; publishing with a failing one would fail.
+  // Organizations and collections whose saved token passed the check; the server creates over
+  // REST there, and publishing with a failing one would fail.
   publishNamespaces: (auth) =>
     (auth.accounts ?? []).flatMap((entry) => {
       if (!entry.authenticated) return [];
-      const organization = /^https:\/\/dev\.azure\.com\/([^/]+)\/?$/iu.exec(entry.host)?.[1];
-      return organization ? [decodeUrlPathSegment(organization)] : [];
+      const key = azureDevOpsOrganizationUrl(entry.host);
+      if (key === null) return [];
+      // A collection is named with its server, which the create request needs to find it.
+      return [
+        isAzureDevOpsServicesUrl(key)
+          ? azureDevOpsPathSegment(key.slice("https://dev.azure.com/".length))
+          : azureDevOpsOrganizationLabel(key),
+      ];
     }),
   defaultCloneTransport: "ssh",
   changeRequestUrl: ({ host, repository, number, remoteUrl, webUrl }) => {
@@ -180,10 +237,10 @@ export const definition = defineSourceControl({
     const [host = input.host, ...path] = (canonicalRepositoryKey(key) ?? key).split("/");
     return buildCommitUrl({ ...input, host, repository: path.join("/") }, "commit");
   },
-  parseCommitUrl: (url) => parseCommitPath(url, COMMIT_PATH),
+  parseCommitUrl: (url) => canonicalLink(parseCommitPath(url, COMMIT_PATH)),
   // Servers on different ports are different servers, so a port stays in the link.
   parseChangeRequestUrl: (url) => {
-    const link = parseChangeRequestPath(url, CHANGE_REQUEST_PATH);
+    const link = canonicalLink(parseChangeRequestPath(url, CHANGE_REQUEST_PATH));
     return link === null || url.port === "" ? link : { ...link, authority: url.host.toLowerCase() };
   },
   // A project named with spaces arrives percent-encoded; the binding it is matched against is not.
@@ -196,7 +253,7 @@ export const definition = defineSourceControl({
         : (parseIssuePath(url, WORK_ITEM_PATH) ??
           (legacy ? parseIssuePath(url, LEGACY_WORK_ITEM_PATH) : null));
     if (link === null) return null;
-    const scope = link.scope.split("/").map(decodeUrlPathSegment).join("/").toLowerCase();
+    const scope = link.scope.split("/").map(azureDevOpsPathSegment).join("/").toLowerCase();
     if (!legacy) return { ...link, scope };
     // On legacy hosts the default collection is optional in a work item URL.
     const scopeAlias =
@@ -214,7 +271,14 @@ export const definition = defineSourceControl({
     "enable-auto-merge",
     "disable-auto-merge",
   ] as const),
-  checkoutCommand: ({ number }) => `az repos pr checkout --id ${number}`,
+  // `az` refuses Azure DevOps Server, so a server's pull request is checked out with git alone.
+  checkoutCommand: ({ number, headBranch, repositoryUrl }) => {
+    const host = repositoryUrl ? URL.parse(repositoryUrl)?.hostname.toLowerCase() : undefined;
+    if (host === undefined || isAzureHostname(host)) return `az repos pr checkout --id ${number}`;
+    return SAFE_BRANCH.test(headBranch)
+      ? `git fetch origin ${headBranch} && git switch ${headBranch}`
+      : null;
+  },
   // Completing or abandoning is a status change, the same `update` this package runs.
   changeRequestCloseCommand:
     /\baz\s+repos\s+pr\s+update\b[^;&|]*--status[\s=]+["']?(?:completed|abandoned)\b/u,
@@ -234,7 +298,9 @@ export const definition = defineSourceControl({
     const path = parseGitRemoteRepository(remoteUrl, { keepGitSuffix: true })?.path;
     if (path === undefined || !isServerRepositoryKey(`${hostname}/${path}`)) return null;
     const segments = path.split("/");
-    const collection = segments.slice(0, collectionLength(segments)).join("/");
+    const collection = azureDevOpsCanonicalPath(
+      segments.slice(0, collectionLength(segments)).join("/"),
+    );
     // An SSH remote's port is the SSH server's; the web is on the host's default https port.
     return {
       kind: KIND,
@@ -249,7 +315,7 @@ export const definition = defineSourceControl({
   repositorySelector: (identity) => {
     const segments = (identity.displayName ?? "").split("/").filter((part) => part !== "_git");
     const name = identity.name || segments.at(-1);
-    return name ? decodeUrlPathSegment(name) : null;
+    return name ? azureDevOpsPathSegment(name) : null;
   },
   // Work items belong to the project: `organization/project` out of the remote's
   // `organization/project/_git/repository`. A shorter path depends on the host: `acme/_git/web`
@@ -258,7 +324,7 @@ export const definition = defineSourceControl({
     const segments = (identity.displayName ?? "")
       .split("/")
       .filter((part) => part !== "")
-      .map(decodeUrlPathSegment);
+      .map(azureDevOpsPathSegment);
     const at = segments.indexOf("_git");
     const repository = segments[at + 1];
     const host = identity.canonicalKey?.split("/", 1)[0]?.toLowerCase() ?? "";
@@ -282,8 +348,8 @@ export const definition = defineSourceControl({
   canonicalRepositoryKey,
   isChangeRequestInRepository: (identity, link) => {
     if (!isChangeRequestAuthorityOfProject(identity, link)) return false;
-    const projectKey = canonicalRepositoryPath(identity.canonicalKey);
-    const linkKey = canonicalRepositoryPath(`${link.host}/${link.repository}`);
+    const projectKey = azureDevOpsCanonicalPath(identity.canonicalKey);
+    const linkKey = azureDevOpsCanonicalPath(`${link.host}/${link.repository}`);
     return (
       (canonicalRepositoryKey(projectKey) ?? projectKey) ===
       (canonicalRepositoryKey(linkKey) ?? linkKey)

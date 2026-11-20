@@ -7508,6 +7508,7 @@
   "004c12f0e6694dec": "Missing scopes: {scopes}. Features that need them won't work.",
   "d957c2cd00ebe9ca": "Token rejected. Replace it with a new token.",
   "3a8353a3e907a4f2": "Organization not found. Check the organization URL.",
+  "2125c64208ac13b3": "This address is not an Azure DevOps server. Check the collection URL.",
   "7da165c79205b00a": "Missing scopes: {scopes}. Replace the token with one that has them.",
   "26a2f90f203d6623": "This server offers REST API {version}; T3 Code needs 7.1 (Azure DevOps Server 2022.1 or newer).",
   "dc079fdebad3c70e": "Could not read the token from its secret provider.",

@@ -25,6 +25,7 @@ import {
 } from "@t3tools/source-control-core/server/IssueTracker";
 import type { SourceControlRateLimitPausedError } from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
+import { azureDevOpsOrganizationUrl, azureDevOpsPathSegment } from "../shared/definition.ts";
 import * as AzureDevOpsApi from "./AzureDevOpsApi.ts";
 import { type AzureDevOpsIdentityError, resolveIdentity } from "./azureDevOpsIdentities.ts";
 import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
@@ -140,22 +141,34 @@ const decodeMembers = Schema.decodeUnknownResult(Members);
 const decodeMemberPage = Schema.decodeUnknownResult(Schema.Struct({ value: Members }));
 const decodeUnknown = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Unknown));
 
-/** The parts of an `organization/project` scope, as the organization URL and the project name. */
+/**
+ * The parts of an `organization/project` scope, or `[tfs/]collection/project` on Azure DevOps
+ * Server, as the organization or collection URL and the project name.
+ */
 function parseScope(
   host: string,
   scope: string,
 ): { readonly organization: string; readonly project: string } | null {
-  const parts = scope.split("/").flatMap((part) => part.trim() || []);
+  const parts = scope.split("/").flatMap((part) => azureDevOpsPathSegment(part).trim() || []);
   // `az` replaces a value starting with `@` by the contents of that local file.
   if (parts.some((part) => part.startsWith("@"))) return null;
+  const hostname = host.toLowerCase();
   // A legacy organization is its hostname, so its scope may be the project alone.
-  if (host.toLowerCase().endsWith(".visualstudio.com")) {
+  if (hostname.endsWith(".visualstudio.com")) {
     const project = parts.length === 1 || parts.length === 2 ? parts.at(-1) : undefined;
     return project === undefined ? null : { organization: `https://${host}`, project };
   }
-  if (parts.length !== 2) return null;
-  const [organization, project] = parts as [string, string];
-  return { organization: `https://${host}/${encodeURIComponent(organization)}`, project };
+  if (hostname === "dev.azure.com") {
+    if (parts.length !== 2) return null;
+    const [organization, project] = parts as [string, string];
+    return { organization: `https://${host}/${encodeURIComponent(organization)}`, project };
+  }
+  const collection = parts[0]?.toLowerCase() === "tfs" ? 2 : 1;
+  if (parts.length !== collection + 1) return null;
+  const organization = azureDevOpsOrganizationUrl(
+    `https://${host}/${parts.slice(0, collection).map(encodeURIComponent).join("/")}`,
+  );
+  return organization === null ? null : { organization, project: parts.at(-1)! };
 }
 
 function parseNumber(key: string): number | null {
@@ -203,7 +216,7 @@ type RestFailure =
   | AzureDevOpsRest.AzureDevOpsRestError
   | SourceControlRateLimitPausedError
   | AzureDevOpsIdentityError
-  | AzureDevOpsRouting.AzureDevOpsTokenUnavailableError;
+  | AzureDevOpsRouting.AzureDevOpsRouteError;
 
 /** A token Azure rejects, or one without the work item scope, disables the tracker like `az` signed out. */
 function restReasonFor(error: RestFailure): {
@@ -212,6 +225,7 @@ function restReasonFor(error: RestFailure): {
 } {
   switch (error._tag) {
     case "AzureDevOpsTokenUnavailableError":
+    case "AzureDevOpsTokenRequiredError":
       return { reason: "unauthenticated" };
     case "SourceControlRateLimitPausedError":
       return { reason: "rate-limited", retryAt: error.retryAt };
@@ -239,6 +253,7 @@ function reasonFor(error: AzureDevOpsApi.AzureDevOpsCliError): IssueTrackerError
     case "AzureDevOpsCliUnavailableError":
       return "missing-tool";
     case "AzureDevOpsCliAuthenticationError":
+    case "AzureDevOpsTokenRequiredError":
       return "unauthenticated";
     case "AzureDevOpsCliRateLimitError":
       return "rate-limited";
@@ -342,7 +357,12 @@ export const make: Effect.Effect<
   ): Effect.Effect<Scope, IssueTrackerError> => {
     const parsed = parseScope(input.host, input.scope);
     return parsed === null
-      ? Effect.fail(refused(operation, "An Azure DevOps scope is named `organization/project`."))
+      ? Effect.fail(
+          refused(
+            operation,
+            "An Azure DevOps scope is named `organization/project`, or `collection/project` on Azure DevOps Server.",
+          ),
+        )
       : routed(operation, parsed);
   };
 
@@ -805,7 +825,10 @@ export const make: Effect.Effect<
             : ["--fields", ...fields.map(([name, value]) => `${name}=${value}`)],
         );
 
-  /** Azure rejects a display name as an unknown identity, so a named assignee becomes their email. */
+  /**
+   * Azure rejects a display name it cannot place as an unknown identity, so a named assignee
+   * becomes their email, or on Azure DevOps Server, where users often have none, `DOMAIN\account`.
+   */
   const restFields = (
     route: RestRoute,
     operation: string,
@@ -820,13 +843,17 @@ export const make: Effect.Effect<
             value,
           ).pipe(
             Effect.mapError(failRest(operation)),
-            Effect.flatMap((identity) =>
-              identity.mail === null
+            Effect.flatMap((identity) => {
+              const assignee = identity.mail ?? identity.account;
+              return assignee === null
                 ? Effect.fail(
-                    refused(operation, `Azure DevOps names no email to assign "${value}" by.`),
+                    refused(
+                      operation,
+                      `Azure DevOps names no email or account to assign "${value}" by.`,
+                    ),
                   )
-                : Effect.succeed([name, identity.mail] as const),
-            ),
+                : Effect.succeed([name, assignee] as const);
+            }),
           ),
     );
 

@@ -44,6 +44,7 @@ export type AzureDevOpsTokenCheck =
       readonly status:
         | "rejected"
         | "organization-not-found"
+        | "not-azure-devops"
         | "secret-unresolved"
         | "unreachable"
         | "not-checked";
@@ -68,7 +69,12 @@ export function azureDevOpsTokenCheck(
   }
   if (code === "missing-scopes") return { status: "missing-scopes", scopes };
   if (code === "unsupported-version") return { status: "unsupported-version", version: value };
-  if (code === "rejected" || code === "organization-not-found" || code === "secret-unresolved") {
+  if (
+    code === "rejected" ||
+    code === "organization-not-found" ||
+    code === "not-azure-devops" ||
+    code === "secret-unresolved"
+  ) {
     return { status: code };
   }
   return { status: "unreachable" };

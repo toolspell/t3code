@@ -8,6 +8,7 @@ import * as Option from "effect/Option";
 import type * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
+import { isAzureDevOpsServicesUrl } from "../shared/definition.ts";
 import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
 
 type AccountEntry = NonNullable<SourceControlProviderAuth["accounts"]>[number];
@@ -39,6 +40,7 @@ const SCOPE_PROBES = [
 const TOKEN_ERROR = {
   rejected: "rejected",
   organizationNotFound: "organization-not-found",
+  notAzureDevOps: "not-azure-devops",
   unreachable: "unreachable",
   secretUnresolved: "secret-unresolved",
   unsupportedVersion: (version: string) => `unsupported-version:${version}`,
@@ -117,6 +119,17 @@ export const checkOrganizationToken = Effect.fn("AzureDevOpsTokenCheck.organizat
   });
 
   const check = Effect.gen(function* () {
+    // Any https URL with a path passes for a collection, so a server is asked, without the
+    // token, whether it is Azure DevOps before the token goes to it.
+    if (!isAzureDevOpsServicesUrl(organizationUrl)) {
+      const server = yield* rest.identify(organizationUrl);
+      if (server !== "azure-devops") {
+        return entry({
+          authenticated: false,
+          error: server === "other" ? TOKEN_ERROR.notAzureDevOps : TOKEN_ERROR.unreachable,
+        });
+      }
+    }
     const viewer = yield* rest
       .json(
         {

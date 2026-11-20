@@ -534,6 +534,7 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   const publishRepository = publishRepositoryOverride ?? publishRepositoryPrefill;
   const publishHost = currentPublishProvider.definition.publishHost(
     Option.getOrNull(publishProviderAuth?.host ?? Option.none()),
+    publishNamespace,
   );
   const publishPathPlaceholder = currentPublishProvider.pathPlaceholder;
   const publishProviderLabel = currentPublishProvider.label;
@@ -718,7 +719,7 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
               <div className="flex items-stretch overflow-hidden rounded-md border border-input bg-background focus-within:outline-2 focus-within:-outline-offset-2 focus-within:outline-ring">
                 <span className="flex shrink-0 items-center gap-1.5 border-r border-input bg-muted/50 px-2.5 font-mono text-xs text-muted-foreground">
                   <currentPublishProvider.Icon className="size-3.5" />
-                  {publishHost}/
+                  {publishHost === null ? null : `${publishHost}/`}
                 </span>
                 {publishNamespace === null ? null : (
                   <span className="flex shrink-0 items-center border-r border-input bg-muted/50 font-mono text-xs text-muted-foreground">

@@ -111,6 +111,9 @@ function azureDevOpsOrganizationBaseFromRestApiUrl(
   }
 }
 
+/** Azure DevOps Server writes a space in a collection's web URL literally, unlike in its REST URLs. */
+const escaped = (url: string) => URL.parse(url)?.href ?? url;
+
 export function azureDevOpsPullRequestWebUrl(input: {
   readonly pullRequestId: number;
   readonly webLink?: string | null | undefined;
@@ -121,12 +124,12 @@ export function azureDevOpsPullRequestWebUrl(input: {
 }): string {
   const webLink = trimOptionalString(input.webLink);
   if (webLink) {
-    return webLink;
+    return escaped(webLink);
   }
 
   const repositoryWebUrl = trimOptionalString(input.repositoryWebUrl);
   if (repositoryWebUrl) {
-    return `${repositoryWebUrl.replace(/\/+$/, "")}/pullrequest/${input.pullRequestId}`;
+    return escaped(`${repositoryWebUrl.replace(/\/+$/, "")}/pullrequest/${input.pullRequestId}`);
   }
 
   const organizationBase = azureDevOpsOrganizationBaseFromRestApiUrl(input.restApiUrl);

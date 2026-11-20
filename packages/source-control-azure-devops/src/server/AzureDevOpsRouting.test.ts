@@ -88,6 +88,16 @@ it.effect("matches an Azure DevOps Server remote to its collection's https token
         "https://ado.example/second%20collection",
         "second-pat",
       ],
+      // Servers and git spell a space every way there is.
+      ...[
+        "https://ado.example/Second+Collection/Web+Site/_git/app",
+        "https://ado.example/Second%2520Collection/Web%2520Site/_git/app",
+        "git@ado.example:Second Collection/Web Site/_git/app",
+        "ssh://ado.example:2222/SECOND%20COLLECTION/Web%20Site/_git/app",
+      ].map(
+        (remoteUrl) =>
+          [remoteUrl, "https://ado.example/second%20collection", "second-pat"] as const,
+      ),
       // The SSH port says nothing of the web's, so the one key for host and collection wins.
       [
         "ssh://ado.example:2222/TFS/Coll/Web%20Site/_git/app",
@@ -108,25 +118,58 @@ it.effect("matches an Azure DevOps Server remote to its collection's https token
       assert.strictEqual(route.project, "Web Site", remoteUrl);
       assert.strictEqual(route.repository, "app", remoteUrl);
     }
-    for (const remoteUrl of [
+    // A server without a usable token is refused: `az` cannot reach one.
+    for (const [remoteUrl, organizationUrl] of [
       // An https remote names its port, and none is saved for the default one.
-      "https://ado.example/tfs/coll/web/_git/app",
+      ["https://ado.example/tfs/coll/web/_git/app", "https://ado.example/tfs/coll"],
       // A token saved for an http URL is never sent.
-      "ssh://ado.example:2222/DefaultCollection/web/_git/app",
-      "https://ado.example/DefaultCollection/web/_git/app",
-    ]) {
-      assert.deepStrictEqual(yield* resolve({ cwd: "/repo", remoteUrl }), { _tag: "Cli" });
+      [
+        "ssh://ado.example:2222/DefaultCollection/web/_git/app",
+        "https://ado.example/defaultcollection",
+      ],
+      [
+        "https://ado.example/DefaultCollection/web/_git/app",
+        "https://ado.example/defaultcollection",
+      ],
+    ] as const) {
+      const error = yield* Effect.flip(resolve({ cwd: "/repo", remoteUrl }));
+      assert.strictEqual(error._tag, "AzureDevOpsTokenRequiredError", remoteUrl);
+      assert.strictEqual(error.organizationUrl, organizationUrl, remoteUrl);
     }
     const organization = (url: string) =>
       AzureDevOpsRouting.AzureDevOpsRouting.use((routing) => routing.resolveOrganization(url));
-    const route = yield* organization("https://ADO.example/Second Collection/Web Site");
-    assert.strictEqual(route._tag, "Rest");
-    if (route._tag === "Rest") assert.strictEqual(Redacted.value(route.token), "second-pat");
-    assert.deepStrictEqual(yield* organization("http://ado.example/defaultcollection"), {
-      _tag: "Cli",
-    });
+    for (const url of [
+      "https://ADO.example/Second Collection/Web Site",
+      "https://ado.example/Second+Collection",
+      "https://ado.example/second%2520collection",
+      "ado.example/SECOND%20collection",
+    ]) {
+      const route = yield* organization(url);
+      assert.strictEqual(route._tag, "Rest", url);
+      if (route._tag === "Rest") assert.strictEqual(Redacted.value(route.token), "second-pat");
+    }
+    const refused = yield* Effect.flip(organization("http://ado.example/defaultcollection"));
+    assert.strictEqual(refused._tag, "AzureDevOpsTokenRequiredError");
+    expect(refused.detail).toBe(
+      "Azure DevOps Server needs a personal access token for ado.example/defaultcollection; save one in Settings → Source control & issues.",
+    );
   }).pipe(Effect.provide(layer));
 });
+
+it.effect(
+  "refuses a server's collection without any saved token, and keeps az for the cloud",
+  () => {
+    const { layer } = harness();
+    return Effect.gen(function* () {
+      const organization = (url: string) =>
+        AzureDevOpsRouting.AzureDevOpsRouting.use((routing) => routing.resolveOrganization(url));
+      assert.deepStrictEqual(yield* organization("https://dev.azure.com/contoso"), { _tag: "Cli" });
+      const error = yield* Effect.flip(organization("https://ado.example/Second Collection"));
+      assert.strictEqual(error._tag, "AzureDevOpsTokenRequiredError");
+      assert.strictEqual(error.organizationUrl, "https://ado.example/second%20collection");
+    }).pipe(Effect.provide(layer));
+  },
+);
 
 it.effect("reads the checkout's primary remote when T3 selected none", () => {
   const { run, layer } = harness(

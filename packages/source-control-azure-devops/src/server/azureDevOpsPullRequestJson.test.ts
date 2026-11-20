@@ -73,6 +73,18 @@ describe("decodePullRequestListJson", () => {
     expect(batch.items[0]?.url).toBe("https://dev.azure.com/acme/platform/_git/web/pullrequest/42");
   });
 
+  // As Azure DevOps Server 2022 answered for a collection named "Second Collection".
+  it("escapes the space a server writes literally in a repository's web URL", () => {
+    const webUrl = "https://ado.example/Second Collection/Web%20App/_git/My Repo";
+    const batch = expectSuccess(
+      decodePullRequestListJson(asJson([pullRequest({ repository: { name: "My Repo", webUrl } })])),
+    );
+
+    expect(batch.items[0]?.url).toBe(
+      "https://ado.example/Second%20Collection/Web%20App/_git/My%20Repo/pullrequest/42",
+    );
+  });
+
   it.each([
     ["completed", "merged"],
     ["something new", "open"],

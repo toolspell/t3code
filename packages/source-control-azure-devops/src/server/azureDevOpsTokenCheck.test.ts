@@ -6,7 +6,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/http";
+import {
+  HttpClient,
+  HttpClientError,
+  type HttpClientRequest,
+  HttpClientResponse,
+} from "effect/http";
 
 import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
 import { checkOrganizationToken, withTokenAccounts } from "./azureDevOpsTokenCheck.ts";
@@ -104,6 +109,88 @@ it.effect("tells a rejected token, an old server and missing scopes apart", () =
 
     const down = yield* check(() => new Response("upstream", { status: 503 }));
     assert.deepStrictEqual([down.authenticated, down.error], [false, "unreachable"]);
+  }),
+);
+
+// Unauthenticated answers as the testbed's Azure DevOps Server 2022 and github.com gave them.
+it.effect.each([
+  {
+    server: "an Azure DevOps Server refusing anonymous access",
+    anonymous: () =>
+      Response.json(
+        { message: "TF400813: Resource not available for anonymous access." },
+        { status: 401, headers: { "x-tfs-processid": "e962d66f", "x-vss-e2eid": "b245b74a" } },
+      ),
+    error: undefined,
+  },
+  {
+    server: "an Azure DevOps Server answering with its sign-in page",
+    anonymous: () =>
+      new Response("<html></html>", {
+        status: 203,
+        headers: { "content-type": "text/html", "X-TFS-ProcessId": "e962d66f" },
+      }),
+    error: undefined,
+  },
+  {
+    server: "a host that is not Azure DevOps",
+    anonymous: () => Response.json({ error: "Not Found" }, { status: 404 }),
+    error: "not-azure-devops",
+  },
+  {
+    server: "a host that does not answer",
+    anonymous: () => {
+      throw new Error("connect ECONNREFUSED");
+    },
+    error: "unreachable",
+  },
+])("asks $server, without the token, before checking a collection", ({ anonymous, error }) =>
+  Effect.gen(function* () {
+    const collection = "https://ado.example/second%20collection";
+    const seen: Array<{ path: string; authorization: string | undefined }> = [];
+    const respond = answer();
+    const layer = AzureDevOpsRest.layer.pipe(
+      Layer.provide(SourceControlRateLimit.layer),
+      Layer.provide(
+        Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make((request) => {
+            const url = new URL(request.url);
+            const authorization = request.headers.authorization;
+            seen.push({ path: url.pathname, authorization });
+            return Effect.try({
+              try: () =>
+                HttpClientResponse.fromWeb(
+                  request,
+                  authorization === undefined
+                    ? anonymous()
+                    : respond(url.pathname.replace(/^\/second%20collection/u, "")),
+                ),
+              catch: (cause) =>
+                new HttpClientError.HttpClientError({
+                  reason: new HttpClientError.TransportError({ request, cause }),
+                }),
+            });
+          }),
+        ),
+      ),
+    );
+    const entry = yield* checkOrganizationToken(collection, Redacted.make("pat")).pipe(
+      Effect.provide(layer),
+    );
+    assert.deepStrictEqual(seen[0], {
+      path: "/second%20collection/_apis/connectionData",
+      authorization: undefined,
+    });
+    if (error === undefined) {
+      assert.deepStrictEqual([entry.authenticated, entry.account], [true, "Sabine Test"]);
+    } else {
+      assert.deepStrictEqual(
+        [entry.authenticated, entry.error, entry.account],
+        [false, error, "second collection"],
+      );
+      assert.strictEqual(seen.length, 1);
+    }
   }),
 );
 

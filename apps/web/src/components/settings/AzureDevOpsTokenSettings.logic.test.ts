@@ -48,6 +48,7 @@ describe("azureDevOpsTokenCheck", () => {
       account({ authenticated: false, error: "organization-not-found" }),
       { status: "organization-not-found" },
     ],
+    [account({ authenticated: false, error: "not-azure-devops" }), { status: "not-azure-devops" }],
     [
       account({ authenticated: false, error: "secret-unresolved" }),
       { status: "secret-unresolved" },

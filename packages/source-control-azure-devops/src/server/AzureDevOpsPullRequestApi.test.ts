@@ -224,30 +224,53 @@ const urlOf = (request: HttpClientRequest.HttpClientRequest | undefined) => {
   return new URL(request.url);
 };
 
-it.effect("names the viewer from connectionData when the organization has a saved token", () => {
-  const { requests, execute, layer, saveToken } = routed(() =>
-    Response.json({
-      authenticatedUser: {
-        id: "c50f0341-3b9a-46d8-81e9-769d2e509704",
-        providerDisplayName: "Bilal",
-        properties: { Account: { $type: "System.String", $value: "bilal@acme.dev" } },
-      },
-    }),
-  );
-  return Effect.gen(function* () {
-    yield* saveToken(true);
-    const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
-
-    assert.strictEqual(yield* cli.getViewer({ cwd: "/w" }), "bilal@acme.dev");
-    const url = urlOf(requests[0]);
-    assert.strictEqual(
-      url.origin + url.pathname,
-      "https://dev.azure.com/contoso/_apis/connectionData",
+// Azure DevOps Server names a Windows user `max` here and `ADO2022\max` on every pull request.
+it.effect.each([
+  { account: "bilal@acme.dev", domain: undefined, viewer: "bilal@acme.dev", requests: 1 },
+  { account: "ADO2022\\max", domain: undefined, viewer: "ADO2022\\max", requests: 1 },
+  { account: "max", domain: "ADO2022", viewer: "ADO2022\\max", requests: 2 },
+  { account: "max", domain: undefined, viewer: "max", requests: 2 },
+])(
+  "names the viewer $account from connectionData as pull requests name them: $viewer",
+  ({ account, domain, viewer, requests: count }) => {
+    const { requests, execute, layer, saveToken } = routed((request) =>
+      new URL(request.url).pathname.endsWith("/_apis/identities")
+        ? Response.json({
+            value: [{ properties: domain === undefined ? {} : { Domain: { $value: domain } } }],
+          })
+        : new URL(request.url).pathname.endsWith("/_apis/resourceAreas")
+          ? Response.json({ value: [] })
+          : Response.json({
+              authenticatedUser: {
+                id: "c50f0341-3b9a-46d8-81e9-769d2e509704",
+                providerDisplayName: "Bilal",
+                properties: { Account: { $type: "System.String", $value: account } },
+              },
+            }),
     );
-    assert.strictEqual(url.searchParams.get("api-version"), "7.1-preview");
-    expect(execute).not.toHaveBeenCalled();
-  }).pipe(Effect.provide(layer));
-});
+    return Effect.gen(function* () {
+      yield* saveToken(true);
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
+
+      assert.strictEqual(yield* cli.getViewer({ cwd: "/w" }), viewer);
+      const url = urlOf(requests[0]);
+      assert.strictEqual(
+        url.origin + url.pathname,
+        "https://dev.azure.com/contoso/_apis/connectionData",
+      );
+      assert.strictEqual(url.searchParams.get("api-version"), "7.1-preview");
+      const lookups = requests.filter((request) => request.url.includes("/_apis/identities"));
+      assert.strictEqual(lookups.length, count - 1);
+      if (lookups[0] !== undefined) {
+        assert.strictEqual(
+          urlOf(lookups[0]).searchParams.get("identityIds"),
+          "c50f0341-3b9a-46d8-81e9-769d2e509704",
+        );
+      }
+      expect(execute).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(layer));
+  },
+);
 
 const restLocation = { project: "Web Site", repository: "web app" };
 const restPullRequest = "/contoso/Web%20Site/_apis/git/repositories/web%20app/pullRequests/42";
@@ -656,7 +679,10 @@ it.effect("returns the pull request an action left, as az prints it", () => {
   }).pipe(Effect.provide(layer));
 });
 
-const picker = (identities: ReadonlyArray<{ id: string; name: string; mail: string }>) =>
+/** A user with an empty `mail` is a Windows user of Azure DevOps Server, named by `account`. */
+const picker = (
+  identities: ReadonlyArray<{ id: string; name: string; mail: string; account?: string }>,
+) =>
   Response.json({
     results: [
       {
@@ -664,6 +690,9 @@ const picker = (identities: ReadonlyArray<{ id: string; name: string; mail: stri
           localId: identity.id,
           displayName: identity.name,
           mail: identity.mail,
+          ...(identity.account === undefined
+            ? {}
+            : { scopeName: "ADO2022", samAccountName: identity.account }),
         })),
       },
     ],
@@ -681,6 +710,15 @@ const directory = (request: HttpClientRequest.HttpClientRequest, body: unknown) 
   if (url.pathname === "/contoso/_apis/IdentityPicker/Identities") {
     const query = (body as { query?: string }).query;
     if (query === "Ana") return picker([{ id: "ana-id", name: "Ana", mail: "ana@acme.dev" }]);
+    if (query === "ADO2022\\ana" || query === "ana") {
+      return picker([{ id: "ana-id", name: "Ana", mail: "", account: "ana" }]);
+    }
+    if (query === "Max") {
+      return picker([
+        { id: "max-1", name: "Max Beckenbach", mail: "", account: "max" },
+        { id: "max-2", name: "Max Roe", mail: "", account: "mroe" },
+      ]);
+    }
     if (query === "Sam") {
       return picker([
         { id: "sam-1", name: "Sam Lee", mail: "sam.lee@acme.dev" },
@@ -696,6 +734,8 @@ it.effect.each([
   { requested: true, reviewers: ["ana@acme.dev"], lookup: "identities" },
   { requested: true, reviewers: ["Ana"], lookup: "picker" },
   { requested: false, reviewers: ["Ana"], lookup: "picker" },
+  { requested: true, reviewers: ["ADO2022\\ana"], lookup: "picker" },
+  { requested: true, reviewers: ["ana"], lookup: "picker" },
 ] as const)(
   "names reviewer $reviewers by its $lookup identity and requested=$requested over REST",
   ({ requested, reviewers, lookup }) => {
@@ -716,11 +756,11 @@ it.effect.each([
         assert.strictEqual(search?.method, "POST");
         assert.strictEqual(urlOf(search).searchParams.get("api-version"), "7.1-preview.1");
         expect(bodyOf(search)).toEqual({
-          query: "Ana",
+          query: reviewers[0],
           identityTypes: ["user"],
           operationScopes: ["ims", "source"],
           options: { MinResults: 5, MaxResults: 20 },
-          properties: ["DisplayName", "Mail"],
+          properties: ["DisplayName", "Mail", "SamAccountName", "ScopeName"],
         });
       } else {
         const search = urlOf(requests.find((request) => request.url.includes("/_apis/identities")));
@@ -759,6 +799,10 @@ it.effect.each([
   {
     reviewer: "Sam",
     candidates: ["Sam Lee (sam.lee@acme.dev)", "Sam Roe (sam.roe@acme.dev)"],
+  },
+  {
+    reviewer: "Max",
+    candidates: ["Max Beckenbach (ADO2022\\max)", "Max Roe (ADO2022\\mroe)"],
   },
   { reviewer: "Nobody", candidates: [] },
   { reviewer: "nobody@acme.dev", candidates: [] },

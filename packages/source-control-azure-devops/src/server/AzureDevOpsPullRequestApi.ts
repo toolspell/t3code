@@ -118,15 +118,28 @@ export type AzureDevOpsPullRequestApiError =
   | AzureDevOpsIdentityError
   | AzureDevOpsRest.AzureDevOpsRestError
   | SourceControlRateLimit.SourceControlRateLimitPausedError
-  | AzureDevOpsRouting.AzureDevOpsTokenUnavailableError;
+  | AzureDevOpsRouting.AzureDevOpsRouteError;
 
 /** `properties.Account` is the sign-in name, which pull requests show as `uniqueName`. */
 const RestViewerSchema = Schema.Struct({
   authenticatedUser: Schema.Struct({
+    id: Schema.NonEmptyString,
     properties: Schema.Struct({
       Account: Schema.Struct({ $value: Schema.NonEmptyString }),
     }),
   }),
+});
+
+const RestViewerDomainSchema = Schema.Struct({
+  value: Schema.Array(
+    Schema.Struct({
+      properties: Schema.optional(
+        Schema.Struct({
+          Domain: Schema.optional(Schema.Struct({ $value: Schema.optional(Schema.String) })),
+        }),
+      ),
+    }),
+  ),
 });
 
 const RestViewerIdSchema = Schema.Struct({
@@ -810,7 +823,29 @@ export const make = Effect.gen(function* () {
               RestViewerSchema,
             )
             .pipe(
-              Effect.map((answer) => answer.authenticatedUser.properties.Account.$value.trim()),
+              Effect.flatMap(({ authenticatedUser: user }) => {
+                const account = user.properties.Account.$value.trim();
+                // Azure DevOps Server names a Windows user by bare account, but pull requests
+                // name them `DOMAIN\account`, which the identity's domain completes.
+                if (/[@\\]/u.test(account)) return Effect.succeed(account);
+                return rest
+                  .json(
+                    {
+                      ...AzureDevOpsRouting.credentials(route),
+                      operation: "getViewer",
+                      area: "ims",
+                      path: "_apis/identities",
+                      query: { identityIds: user.id, queryMembership: "None" },
+                    },
+                    RestViewerDomainSchema,
+                  )
+                  .pipe(
+                    Effect.map(({ value }) => {
+                      const domain = value[0]?.properties?.Domain?.$value?.trim();
+                      return domain ? `${domain}\\${account}` : account;
+                    }),
+                  );
+              }),
             ),
         cli: () => cliViewer(input),
       });

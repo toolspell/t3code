@@ -7502,6 +7502,7 @@
   "004c12f0e6694dec": "Portées manquantes : {scopes}. Les fonctionnalités qui en ont besoin ne fonctionneront pas.",
   "d957c2cd00ebe9ca": "Jeton refusé. Remplacez-le par un nouveau jeton.",
   "3a8353a3e907a4f2": "Organisation introuvable. Vérifiez l’URL de l’organisation.",
+  "2125c64208ac13b3": "Cette adresse n’est pas un serveur Azure DevOps. Vérifiez l’URL de la collection.",
   "7da165c79205b00a": "Portées manquantes : {scopes}. Remplacez le jeton par un jeton qui les possède.",
   "26a2f90f203d6623": "Ce serveur propose l’API REST {version} ; T3 Code nécessite la 7.1 (Azure DevOps Server 2022.1 ou plus récent).",
   "dc079fdebad3c70e": "Impossible de lire le jeton depuis son fournisseur de secrets.",

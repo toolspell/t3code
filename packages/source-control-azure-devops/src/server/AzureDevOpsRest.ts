@@ -23,6 +23,7 @@ const DEFAULT_API_VERSION = "7.1";
 const REQUEST_TIMEOUT = Duration.seconds(60);
 const DEFAULT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const RESOURCE_AREAS_API_VERSION = "7.1-preview";
+const IDENTIFY_TIMEOUT = Duration.seconds(15);
 const KIND = SourceControlProviderKind.make("azure-devops");
 
 export const AzureDevOpsRestErrorReason = Schema.Literals([
@@ -114,6 +115,13 @@ export class AzureDevOpsRest extends Context.Service<
       input: AzureDevOpsRestRequest,
       schema: S,
     ) => Effect.Effect<S["Type"], AzureDevOpsRestFailure, S["DecodingServices"]>;
+    /**
+     * Asks a server, without any credential, whether it is Azure DevOps: whatever it answers, an
+     * Azure DevOps server stamps its `X-TFS-*` or `X-VSS-*` headers on it.
+     */
+    readonly identify: (
+      organizationUrl: string,
+    ) => Effect.Effect<"azure-devops" | "other" | "unreachable">;
   }
 >()("@t3tools/source-control-azure-devops/server/AzureDevOpsRest") {}
 
@@ -143,7 +151,10 @@ function organizationKey(organizationUrl: string): string {
  * The full request URL; `base` is the organization URL or an accepted area host. Undefined when
  * the path would leave `base`, such as through a `..` segment, since the token belongs to it.
  */
-function requestUrl(base: string, input: AzureDevOpsRestRequest): string | undefined {
+function requestUrl(
+  base: string,
+  input: Pick<AzureDevOpsRestRequest, "path" | "query" | "apiVersion">,
+): string | undefined {
   const root = new URL(`${trimSlashes(base)}/`);
   const url = new URL(`${root.href}${input.path.replace(/^\/+/u, "")}`);
   if (url.origin !== root.origin || !url.pathname.startsWith(root.pathname)) return undefined;
@@ -438,7 +449,36 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  return AzureDevOpsRest.of({ request, json });
+  const identify: AzureDevOpsRest["Service"]["identify"] = Effect.fn("AzureDevOpsRest.identify")(
+    function* (organizationUrl) {
+      const url = requestUrl(organizationUrl, {
+        path: "_apis/connectionData",
+        apiVersion: RESOURCE_AREAS_API_VERSION,
+      });
+      if (url === undefined) return "other" as const;
+      const response = yield* httpClient
+        .execute(
+          HttpClientRequest.get(url).pipe(
+            HttpClientRequest.setHeaders({
+              accept: "application/json",
+              "x-tfs-fedauthredirect": "Suppress",
+            }),
+          ),
+        )
+        .pipe(
+          Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+          Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
+          Effect.timeout(IDENTIFY_TIMEOUT),
+          Effect.option,
+        );
+      if (Option.isNone(response)) return "unreachable" as const;
+      return Object.keys(response.value.headers).some((name) => /^x-(?:tfs|vss)-/iu.test(name))
+        ? ("azure-devops" as const)
+        : ("other" as const);
+    },
+  );
+
+  return AzureDevOpsRest.of({ request, json, identify });
 });
 
 export const layer = Layer.effect(AzureDevOpsRest, make);

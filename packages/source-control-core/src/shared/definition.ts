@@ -278,7 +278,8 @@ export interface SourceControlDefinition {
   readonly repositoryPathHint: string;
   readonly publicHost: string | null;
   readonly publishDescription: string;
-  readonly publishHost: (signedInHost: string | null) => string;
+  /** Null when the selected namespace already names the host. */
+  readonly publishHost: (signedInHost: string | null, namespace?: string | null) => string | null;
   readonly newRepositoryOwner: (account: string | null) => { readonly owner: string | null } | null;
   /**
    * Namespaces a published repository must name first, such as Azure DevOps organizations with a

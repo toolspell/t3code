@@ -27,6 +27,7 @@ import {
 import { checkoutRemoteUrl, scopeFromRemoteUrl } from "./azureDevOpsRemote.ts";
 import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
 import * as AzureDevOpsRouting from "./AzureDevOpsRouting.ts";
+import * as AzureDevOpsClient from "../shared/definition.ts";
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -202,6 +203,7 @@ export class AzureDevOpsRepositoryDecodeError extends Schema.TaggedError<AzureDe
 }
 
 export const AzureDevOpsCliError = Schema.Union([
+  AzureDevOpsRouting.AzureDevOpsTokenRequiredError,
   AzureDevOpsCliUnavailableError,
   AzureDevOpsCliAuthenticationError,
   AzureDevOpsCliRateLimitError,
@@ -218,7 +220,7 @@ export type AzureDevOpsRoutedError =
   | AzureDevOpsCliError
   | AzureDevOpsRest.AzureDevOpsRestError
   | SourceControlRateLimit.SourceControlRateLimitPausedError
-  | AzureDevOpsRouting.AzureDevOpsTokenUnavailableError;
+  | AzureDevOpsRouting.AzureDevOpsRouteError;
 
 export interface AzureDevOpsRepositoryCloneUrls {
   readonly nameWithOwner: string;
@@ -329,14 +331,19 @@ function normalizeDefaultBranch(value: string | null | undefined): string | null
   return trimmed.length > 0 ? trimmed : null;
 }
 
+/** Azure DevOps Server answers a space in a name literally, which git cannot clone from. */
+function escapedUrl(url: string): string {
+  return url.includes("://") ? (URL.parse(url)?.href ?? url) : url;
+}
+
 function normalizeRepositoryCloneUrls(
   raw: Schema.Schema.Type<typeof RawAzureDevOpsRepositorySchema>,
 ): AzureDevOpsRepositoryCloneUrls {
   const projectName = raw.project?.name.trim();
   return {
     nameWithOwner: projectName ? `${projectName}/${raw.name}` : raw.name,
-    url: raw.remoteUrl,
-    sshUrl: raw.sshUrl,
+    url: escapedUrl(raw.remoteUrl),
+    sshUrl: escapedUrl(raw.sshUrl),
   };
 }
 
@@ -353,7 +360,8 @@ function parseRepositorySpecifier(repository: string): {
     }
   }
   return {
-    organization: parts.length > 2 ? (parts.at(-3) ?? null) : null,
+    // A collection is named with its server: `{host}/[tfs/]{collection}/{project}/{name}`.
+    organization: parts.length > 2 ? parts.slice(0, -2).join("/") : null,
     project: parts.length > 1 ? (parts.at(-2) ?? null) : null,
     name: parts.at(-1) ?? repository.trim(),
   };
@@ -397,6 +405,15 @@ const detectsScope = (args: ReadonlyArray<string>) => {
 };
 
 /** Replaces `--detect true` with the scope of an Azure remote. */
+function organizationOption(args: ReadonlyArray<string>): string | undefined {
+  for (const [index, arg] of args.entries()) {
+    if (arg === "--organization" || arg === "--org") return args[index + 1];
+    const joined = /^--(?:organization|org)=(.*)$/su.exec(arg);
+    if (joined) return joined[1];
+  }
+  return undefined;
+}
+
 export function scopeAzureCliArgs(
   args: ReadonlyArray<string>,
   remoteUrl: string,
@@ -484,11 +501,29 @@ export const make = Effect.gen(function* () {
   const execute: AzureDevOpsApi["Service"]["execute"] = Effect.fn("AzureDevOpsApi.execute")(
     function* (input) {
       let args = input.args;
-      if (detectsScope(args)) {
+      // `az` refuses Azure DevOps Server, which only a saved token reaches. A command naming no
+      // organization, such as `account show`, answers for whichever one the checkout is in.
+      let organization = organizationOption(args);
+      if (detectsScope(args) || organization === undefined) {
         // Windows az running in WSL cannot inspect the server's Linux checkout.
         const remoteUrl =
           input.remoteUrl ?? (yield* checkoutRemoteUrl(process, input.cwd, input.timeoutMs));
-        if (remoteUrl !== null) args = scopeAzureCliArgs(args, remoteUrl);
+        if (remoteUrl !== null) {
+          args = scopeAzureCliArgs(args, remoteUrl);
+          organization ??= scopeFromRemoteUrl(remoteUrl)?.organizationUrl;
+        }
+      }
+      const organizationUrl =
+        organization === undefined
+          ? null
+          : AzureDevOpsClient.azureDevOpsOrganizationUrl(
+              organization.replace(/^http:/iu, "https:"),
+            );
+      if (
+        organizationUrl !== null &&
+        !AzureDevOpsClient.isAzureDevOpsServicesUrl(organizationUrl)
+      ) {
+        return yield* new AzureDevOpsRouting.AzureDevOpsTokenRequiredError({ organizationUrl });
       }
       return yield* process
         .run({
@@ -803,11 +838,10 @@ export const make = Effect.gen(function* () {
       // `organization/project/repository` names the organization; it wins over the checkout's.
       const { organization, project } = repository;
       if (organization !== null && project !== null) {
-        const organizationUrl = `https://dev.azure.com/${encodeURIComponent(organization)}`;
-        const route = yield* routing.resolveOrganization(organizationUrl);
+        const route = yield* routing.resolveOrganization(organization);
         return route._tag === "Rest"
           ? yield* restCreate(route, project)
-          : yield* cliCreate(organizationUrl);
+          : yield* cliCreate(`https://dev.azure.com/${encodeURIComponent(organization)}`);
       }
       return yield* AzureDevOpsRouting.byRoute(routing, input, {
         rest: (route) => restCreate(route, project ?? route.project),

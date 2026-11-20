@@ -7507,6 +7507,7 @@
   "004c12f0e6694dec": "Behörigheter saknas: {scopes}. Funktioner som behöver dem fungerar inte.",
   "d957c2cd00ebe9ca": "Token avvisad. Ersätt den med en ny token.",
   "3a8353a3e907a4f2": "Organisationen hittades inte. Kontrollera organisations-URL:en.",
+  "2125c64208ac13b3": "Den här adressen är inte en Azure DevOps-server. Kontrollera samlingens URL.",
   "7da165c79205b00a": "Behörigheter saknas: {scopes}. Ersätt token med en som har dem.",
   "26a2f90f203d6623": "Den här servern erbjuder REST API {version}; T3 Code behöver 7.1 (Azure DevOps Server 2022.1 eller senare).",
   "dc079fdebad3c70e": "Det gick inte att läsa token från dess hemlighetsleverantör.",

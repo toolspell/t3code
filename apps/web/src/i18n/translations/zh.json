@@ -7516,6 +7516,7 @@
   "004c12f0e6694dec": "缺少范围：{scopes}。需要这些范围的功能将无法使用。",
   "d957c2cd00ebe9ca": "token 被拒绝。请换成新的 token。",
   "3a8353a3e907a4f2": "未找到组织。请检查组织 URL。",
+  "2125c64208ac13b3": "此地址不是 Azure DevOps 服务器。请检查集合 URL。",
   "7da165c79205b00a": "缺少范围：{scopes}。请换成具有这些范围的 token。",
   "26a2f90f203d6623": "此服务器提供 REST API {version}；T3 Code 需要 7.1（Azure DevOps Server 2022.1 或更高版本）。",
   "dc079fdebad3c70e": "无法从密钥提供方读取该 token。",
