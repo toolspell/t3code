@@ -34,73 +34,6 @@ const layer = it.layer(
   ),
 );
 
-it.effect("names the viewer from connectionData when the organization has a saved token", () => {
-  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
-  const execute = vi.fn<AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]>(() =>
-    Effect.die("An organization with a saved token must not reach az."),
-  );
-  const host = TestSourceControlHost.layer({
-    process: {
-      run: () =>
-        Effect.succeed(
-          TestSourceControlHost.processOutput(
-            "origin\thttps://dev.azure.com/contoso/web/_git/app (fetch)\n",
-          ),
-        ),
-    },
-  });
-  const layer = AzureDevOpsPullRequestCli.layer.pipe(
-    Layer.provide(Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({ execute })),
-    Layer.provide(AzureDevOpsRouting.layer),
-    Layer.provide(
-      AzureDevOpsRest.layer.pipe(
-        Layer.provide(SourceControlRateLimit.layer),
-        Layer.provide(
-          Layer.succeed(
-            HttpClient.HttpClient,
-            HttpClient.make((request) => {
-              requests.push(request);
-              return Effect.succeed(
-                HttpClientResponse.fromWeb(
-                  request,
-                  Response.json({
-                    authenticatedUser: {
-                      id: "c50f0341-3b9a-46d8-81e9-769d2e509704",
-                      providerDisplayName: "Bilal",
-                      properties: { Account: { $type: "System.String", $value: "bilal@acme.dev" } },
-                    },
-                  }),
-                ),
-              );
-            }),
-          ),
-        ),
-      ),
-    ),
-    Layer.provideMerge(host),
-    Layer.provide(NodeServices.layer),
-  );
-  return Effect.gen(function* () {
-    yield* TestSourceControlHost.TestSourceControlHostSettings.use((settings) =>
-      settings.update({
-        sourceControlHosts: {
-          "azure-devops": { tokens: { "https://dev.azure.com/contoso": "contoso-pat" } },
-        },
-      }),
-    );
-    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
-
-    assert.strictEqual(yield* cli.getViewer({ cwd: "/w" }), "bilal@acme.dev");
-    const url = new URL(requests[0]!.url);
-    assert.strictEqual(
-      url.origin + url.pathname,
-      "https://dev.azure.com/contoso/_apis/connectionData",
-    );
-    assert.strictEqual(url.searchParams.get("api-version"), "7.1-preview");
-    expect(execute).not.toHaveBeenCalled();
-  }).pipe(Effect.provide(layer));
-});
-
 function output(stdout: string) {
   return {
     exitCode: ChildProcessSpawner.ExitCode(0),
@@ -232,6 +165,372 @@ function changeEntries(count: number): ReadonlyArray<Record<string, unknown>> {
     };
   });
 }
+
+/**
+ * The checkout's remote is in organization `contoso`, project `Web Site`, repository `web app`.
+ * `saveToken(false)` runs a call through `execute`, `saveToken(true)` through `respond`.
+ */
+function routed(respond: (request: HttpClientRequest.HttpClientRequest) => Response) {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const execute = vi.fn<AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]>(() =>
+    Effect.die("An organization with a saved token must not reach az."),
+  );
+  const layer = AzureDevOpsPullRequestCli.layer.pipe(
+    Layer.provide(Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({ execute })),
+    Layer.provide(AzureDevOpsRouting.layer),
+    Layer.provide(
+      AzureDevOpsRest.layer.pipe(
+        Layer.provide(SourceControlRateLimit.layer),
+        Layer.provide(
+          Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.make((request) => {
+              requests.push(request);
+              return Effect.succeed(HttpClientResponse.fromWeb(request, respond(request)));
+            }),
+          ),
+        ),
+      ),
+    ),
+    Layer.provideMerge(
+      TestSourceControlHost.layer({
+        process: {
+          run: () =>
+            Effect.succeed(
+              TestSourceControlHost.processOutput(
+                "origin\thttps://dev.azure.com/contoso/Web%20Site/_git/web%20app (fetch)\n",
+              ),
+            ),
+        },
+      }),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
+  const saveToken = (saved: boolean) =>
+    TestSourceControlHost.TestSourceControlHostSettings.use((settings) =>
+      settings.update({
+        sourceControlHosts: {
+          "azure-devops": {
+            tokens: saved ? { "https://dev.azure.com/contoso": "contoso-pat" } : {},
+          },
+        },
+      }),
+    );
+  return { requests, execute, layer, saveToken };
+}
+
+const urlOf = (request: HttpClientRequest.HttpClientRequest | undefined) => {
+  assert.isDefined(request);
+  return new URL(request.url);
+};
+
+it.effect("names the viewer from connectionData when the organization has a saved token", () => {
+  const { requests, execute, layer, saveToken } = routed(() =>
+    Response.json({
+      authenticatedUser: {
+        id: "c50f0341-3b9a-46d8-81e9-769d2e509704",
+        providerDisplayName: "Bilal",
+        properties: { Account: { $type: "System.String", $value: "bilal@acme.dev" } },
+      },
+    }),
+  );
+  return Effect.gen(function* () {
+    yield* saveToken(true);
+    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+    assert.strictEqual(yield* cli.getViewer({ cwd: "/w" }), "bilal@acme.dev");
+    const url = urlOf(requests[0]);
+    assert.strictEqual(
+      url.origin + url.pathname,
+      "https://dev.azure.com/contoso/_apis/connectionData",
+    );
+    assert.strictEqual(url.searchParams.get("api-version"), "7.1-preview");
+    expect(execute).not.toHaveBeenCalled();
+  }).pipe(Effect.provide(layer));
+});
+
+const restLocation = { project: "Web Site", repository: "web app" };
+const restPullRequest = "/contoso/Web%20Site/_apis/git/repositories/web%20app/pullRequests/42";
+
+it.effect.each([
+  {
+    read: "a pull request",
+    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+      cli.getPullRequest({ cwd: "/w", number: 42 }),
+    body: { ...pullRequestRow, labels: [{ name: "release-1.0" }] },
+    path: "/contoso/_apis/git/pullrequests/42",
+    query: {},
+  },
+  {
+    read: "review threads",
+    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+      cli.listThreads({ cwd: "/w", location: restLocation, number: 42 }),
+    body: {
+      value: [
+        {
+          id: 3,
+          threadContext: { filePath: "/src/page.ts" },
+          comments: [
+            {
+              id: 1,
+              content: "Rename this",
+              author: { uniqueName: "ana@acme.dev", displayName: "Ana" },
+              publishedDate: "2026-07-02T00:00:00Z",
+            },
+          ],
+        },
+      ],
+    },
+    path: `${restPullRequest}/threads`,
+    query: {},
+  },
+  {
+    read: "labels",
+    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+      cli.listLabels({ cwd: "/w", location: restLocation, number: 42 }),
+    body: { count: 1, value: [{ id: "4f1c", name: "release-1.0" }] },
+    path: `${restPullRequest}/labels`,
+    query: {},
+  },
+  {
+    read: "iterations",
+    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+      cli.listIterations({ cwd: "/w", location: restLocation, number: 42 }),
+    body: oneIteration,
+    path: `${restPullRequest}/iterations`,
+    query: {},
+  },
+  {
+    read: "an iteration's changes",
+    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+      cli.listIterationChanges({ cwd: "/w", location: restLocation, number: 42, iterationId: 2 }),
+    body: { changeEntries: changeEntries(2) },
+    path: `${restPullRequest}/iterations/2/changes`,
+    query: { $top: "2000", $skip: "0" },
+  },
+  {
+    read: "a file",
+    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+      cli.readItemContent({
+        cwd: "/w",
+        location: restLocation,
+        path: "docs/a#1&b.md",
+        commit: "c".repeat(40),
+      }),
+    body: { content: "text\n", contentMetadata: { isBinary: false } },
+    path: "/contoso/Web%20Site/_apis/git/repositories/web%20app/items",
+    query: {
+      path: "/docs/a#1&b.md",
+      "versionDescriptor.versionType": "commit",
+      "versionDescriptor.version": "c".repeat(40),
+      includeContent: "true",
+      includeContentMetadata: "true",
+      $format: "json",
+    },
+  },
+])("reads $read over REST as az reads it", ({ call, body, path, query }) => {
+  const { requests, execute, layer, saveToken } = routed(() => Response.json(body));
+  return Effect.gen(function* () {
+    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+    execute.mockReturnValue(Effect.succeed(output(JSON.stringify(body))));
+    const viaCli = yield* call(cli);
+    execute.mockClear();
+    yield* saveToken(true);
+
+    assert.deepStrictEqual(yield* call(cli), viaCli);
+    expect(execute).not.toHaveBeenCalled();
+    const url = urlOf(requests[0]);
+    assert.strictEqual(url.pathname, path);
+    assert.strictEqual(url.searchParams.get("api-version"), "7.1");
+    for (const [name, value] of Object.entries(query)) {
+      assert.strictEqual(url.searchParams.get(name), value, name);
+    }
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect.each([
+  {
+    involvement: "authored",
+    author: "ana@acme.dev",
+    creatorId: "viewer-id",
+    reviewerId: null,
+  },
+  {
+    involvement: "reviewing",
+    author: "ana@acme.dev",
+    creatorId: "ana-id",
+    reviewerId: "viewer-id",
+  },
+  { involvement: "all", author: undefined, creatorId: null, reviewerId: null },
+] as const)(
+  "lists $involvement pull requests over REST by the ids az would resolve",
+  ({ involvement, author, creatorId, reviewerId }) => {
+    const rows = pullRequestRows(3, 1);
+    const { requests, execute, layer, saveToken } = routed((request) => {
+      const { pathname } = new URL(request.url);
+      if (pathname.endsWith("/_apis/connectionData")) {
+        return Response.json({ authenticatedUser: { id: "viewer-id" } });
+      }
+      if (pathname.endsWith("/_apis/resourceAreas")) return Response.json({ value: [] });
+      if (pathname.endsWith("/_apis/identities"))
+        return Response.json({ value: [{ id: "ana-id" }] });
+      return Response.json({ count: rows.length, value: rows });
+    });
+    return Effect.gen(function* () {
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const list = cli.listPullRequests({
+        cwd: "/w",
+        repository: "web app",
+        state: "open",
+        involvement,
+        viewer: "bilal@acme.dev",
+        limit: 2,
+        author,
+        cursor: { updatedBefore: "2026-07-02T00:00:00Z", delivered: 20 },
+      });
+      execute.mockReturnValue(Effect.succeed(output(JSON.stringify(rows))));
+      const viaCli = yield* list;
+      execute.mockClear();
+      yield* saveToken(true);
+
+      assert.deepStrictEqual(yield* list, viaCli);
+      expect(execute).not.toHaveBeenCalled();
+      const url = urlOf(requests.at(-1));
+      assert.strictEqual(
+        url.pathname,
+        "/contoso/Web%20Site/_apis/git/repositories/web%20app/pullrequests",
+      );
+      assert.deepStrictEqual(
+        {
+          status: url.searchParams.get("searchCriteria.status"),
+          creatorId: url.searchParams.get("searchCriteria.creatorId"),
+          reviewerId: url.searchParams.get("searchCriteria.reviewerId"),
+          includeLinks: url.searchParams.get("searchCriteria.includeLinks"),
+          skip: url.searchParams.get("$skip"),
+          top: url.searchParams.get("$top"),
+        },
+        { status: "active", creatorId, reviewerId, includeLinks: "true", skip: "20", top: "3" },
+      );
+      if (author !== undefined && involvement !== "authored") {
+        const lookup = urlOf(requests.find((request) => request.url.includes("/_apis/identities")));
+        assert.strictEqual(lookup.searchParams.get("filterValue"), author);
+        assert.strictEqual(lookup.searchParams.get("searchFilter"), "General");
+      }
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("fails a REST listing by an author no identity matches, as az does", () => {
+  const { requests, layer, saveToken } = routed((request) =>
+    new URL(request.url).pathname.endsWith("/_apis/resourceAreas")
+      ? Response.json({ value: [] })
+      : Response.json({ count: 0, value: [] }),
+  );
+  return Effect.gen(function* () {
+    yield* saveToken(true);
+    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+    const error = yield* Effect.flip(
+      cli.listPullRequests({
+        cwd: "/w",
+        repository: "web app",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal@acme.dev",
+        limit: 2,
+        author: "nobody@acme.dev",
+      }),
+    );
+    assert.strictEqual(error._tag, "AzureDevOpsRestError");
+    expect(requests.some((request) => request.url.includes("/pullrequests"))).toBe(false);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("reads policy evaluations over REST under the project id the pull request names", () => {
+  const policyRow = (name: string, status: string) => ({
+    status,
+    configuration: {
+      url: "https://dev.azure.com/contoso/Web%20Site/_apis/policy/configurations/54",
+      isBlocking: true,
+      type: { id: "0609b952-1397-4640-95ec-e00a01b2c241" },
+      settings: { displayName: name },
+    },
+  });
+  const pages = [
+    Array.from({ length: 100 }, () => policyRow("Lint", "approved")),
+    [policyRow("Tests", "rejected")],
+  ];
+  const { requests, execute, layer, saveToken } = routed((request) => {
+    const url = new URL(request.url);
+    if (url.pathname === "/contoso/_apis/git/pullrequests/42") {
+      return Response.json({ ...pullRequestRow, repository: { project: { id: "p-1" } } });
+    }
+    const page = pages[Number(url.searchParams.get("$skip")) / 100] ?? [];
+    return Response.json({ count: page.length, value: page });
+  });
+  return Effect.gen(function* () {
+    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+    const read = cli.listPolicyChecks({ cwd: "/w", number: 42, isDraft: false });
+    execute
+      .mockReturnValueOnce(Effect.succeed(output(JSON.stringify(pages[0]))))
+      .mockReturnValueOnce(Effect.succeed(output(JSON.stringify(pages[1]))));
+    const viaCli = yield* read;
+    execute.mockClear();
+    yield* saveToken(true);
+
+    assert.deepStrictEqual(yield* read, viaCli);
+    expect(execute).not.toHaveBeenCalled();
+    const evaluations = requests.slice(1).map(urlOf);
+    assert.deepStrictEqual(
+      evaluations.map((url) => [url.pathname, url.searchParams.get("$skip")]),
+      [
+        ["/contoso/p-1/_apis/policy/evaluations", "0"],
+        ["/contoso/p-1/_apis/policy/evaluations", "100"],
+      ],
+    );
+    assert.strictEqual(
+      evaluations[0]?.searchParams.get("artifactId"),
+      "vstfs:///CodeReview/CodeReviewId/p-1/42",
+    );
+    assert.strictEqual(evaluations[0]?.searchParams.get("api-version"), "7.1-preview");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("posts the blob ids over REST and reads the zip as az's archive is read", () => {
+  const id = (digit: string) => digit.repeat(40);
+  const zip = streamedZip([
+    { name: id("a"), data: new TextEncoder().encode("plain text\n") },
+    { name: id("c"), data: Uint8Array.of(0x89, 0x50, 0x00, 0x01) },
+  ]);
+  const { requests, execute, layer, saveToken } = routed(() => new Response(new Uint8Array(zip)));
+  return Effect.gen(function* () {
+    yield* saveToken(true);
+    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+    const blobs = yield* cli.readBlobs({
+      cwd: "/w",
+      location: restLocation,
+      objectIds: [id("a"), id("C"), id("a"), "../etc"],
+    });
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(Object.fromEntries(blobs)).toEqual({
+      [id("a")]: { contents: "plain text\n", isBinary: false },
+      [id("c")]: { contents: "", isBinary: true },
+    });
+    const [request] = requests;
+    assert.isDefined(request);
+    assert.strictEqual(request.method, "POST");
+    assert.strictEqual(
+      new URL(request.url).pathname,
+      "/contoso/Web%20Site/_apis/git/repositories/web%20app/blobs",
+    );
+    assert.strictEqual(request.headers.accept, "application/zip");
+    assert.strictEqual(request.body._tag, "Uint8Array");
+    if (request.body._tag === "Uint8Array") {
+      expect(JSON.parse(new TextDecoder().decode(request.body.body))).toEqual([id("a"), id("C")]);
+    }
+  }).pipe(Effect.provide(layer));
+});
 
 afterEach(() => {
   mockedExecute.mockReset();

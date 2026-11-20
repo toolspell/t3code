@@ -27,14 +27,19 @@ import {
   decodeIterationsJson,
   decodeLabelsJson,
   decodePolicyChecksJson,
+  decodePolicyChecksPageJson,
   decodePullRequestJson,
   decodePullRequestListJson,
+  decodePullRequestPageJson,
   decodeThreadsJson,
   decodeViewerJson,
   type AzureDevOpsChangeEntry,
+  type AzureDevOpsChangePage,
   type AzureDevOpsItemContent,
   type AzureDevOpsIteration,
+  type AzureDevOpsPolicyCheckPage,
   type AzureDevOpsPullRequest,
+  type AzureDevOpsPullRequestBatch,
   type AzureDevOpsRepositoryLocation,
 } from "./azureDevOpsPullRequestJson.ts";
 import type { ProviderListCursor } from "@t3tools/source-control-core/server/PullRequestProvider";
@@ -124,6 +129,24 @@ const RestViewerSchema = Schema.Struct({
     }),
   }),
 });
+
+const RestViewerIdSchema = Schema.Struct({
+  authenticatedUser: Schema.Struct({ id: Schema.NonEmptyString }),
+});
+
+const RestIdentitiesSchema = Schema.Struct({
+  value: Schema.Array(Schema.Struct({ id: Schema.NonEmptyString })),
+});
+
+const RestPullRequestProjectSchema = Schema.Struct({
+  repository: Schema.Struct({ project: Schema.Struct({ id: Schema.NonEmptyString }) }),
+});
+
+const EMPTY_PULL_REQUEST_BATCH: AzureDevOpsPullRequestBatch = {
+  items: [],
+  rawIndexes: [],
+  rawCount: 0,
+};
 
 const REST_API_VERSION = "7.1";
 const PULL_REQUEST_LIST_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
@@ -267,16 +290,16 @@ export class AzureDevOpsPullRequestCli extends Context.Service<
   }
 >()("@t3tools/source-control-azure-devops/server/AzureDevOpsPullRequestCli") {}
 
-function statusArgs(state: PullRequestListState): ReadonlyArray<string> {
+function azureStatus(state: PullRequestListState): string {
   switch (state) {
     case "open":
-      return ["--status", "active"];
+      return "active";
     case "merged":
-      return ["--status", "completed"];
+      return "completed";
     case "closed":
-      return ["--status", "abandoned"];
+      return "abandoned";
     case "all":
-      return ["--status", "all"];
+      return "all";
   }
 }
 
@@ -414,18 +437,38 @@ export const make = Effect.gen(function* () {
     `pullRequestId=${input.number}`,
   ];
 
+  /** A REST read decoded by the same decoder as the matching `az` output. */
+  const restRead = <A>(
+    route: AzureDevOpsRouting.AzureDevOpsRestRoute,
+    request: Omit<AzureDevOpsRest.AzureDevOpsRestRequest, "organizationUrl" | "token"> & {
+      readonly operation: string;
+    },
+    decode: (raw: string) => Result.Result<A, unknown>,
+  ) =>
+    rest
+      .request({ ...AzureDevOpsRouting.credentials(route), ...request })
+      .pipe(Effect.flatMap(AzureDevOpsRest.decodeAnswer(request.operation, decode)));
+
+  const restPullRequestPath = (input: {
+    readonly location: AzureDevOpsRepositoryLocation;
+    readonly number: number;
+  }) =>
+    `${AzureDevOpsRest.repositoryPath(input.location.project, input.location.repository)}/pullRequests/${input.number}`;
+
+  type PullRequestListInput = Parameters<
+    AzureDevOpsPullRequestCli["Service"]["listPullRequests"]
+  >[0];
+
   /** Decoding can shorten a non-final page; advance by raw rows. */
-  const listPullRequestPage = (input: {
-    readonly cwd: string;
-    readonly repository: string;
-    readonly state: PullRequestListState;
-    readonly involvement: PullRequestInvolvement;
-    readonly viewer: string;
-    readonly author?: string | undefined;
+  const collectPullRequests = (input: {
     readonly limit: number;
     readonly skip: number;
     readonly cursorAdvance: number;
     readonly items: ReadonlyArray<AzureDevOpsPullRequest>;
+    readonly page: (
+      skip: number,
+      top: number,
+    ) => Effect.Effect<AzureDevOpsPullRequestBatch, AzureDevOpsPullRequestCliError>;
   }): Effect.Effect<
     {
       readonly items: ReadonlyArray<AzureDevOpsPullRequest>;
@@ -436,74 +479,178 @@ export const make = Effect.gen(function* () {
   > => {
     const remaining = input.limit - input.items.length;
     const top = remaining + 1;
-    return executeJson({
-      cwd: input.cwd,
-      maxOutputBytes: PULL_REQUEST_LIST_MAX_OUTPUT_BYTES,
-      args: [
-        "repos",
-        "pr",
-        "list",
-        ...detectArgs,
-        "--repository",
-        input.repository,
-        ...statusArgs(input.state),
-        ...involvementArgs(input),
-        ...(input.author === undefined || input.involvement === "authored"
-          ? []
-          : ["--creator", input.author]),
-        "--include-links",
-        ...(input.skip === 0 ? [] : ["--skip", String(input.skip)]),
-        "--top",
-        String(top),
-      ],
-    }).pipe(
-      Effect.flatMap((result) => {
-        const raw = result.stdout.trim();
-        if (raw.length === 0) {
-          return Effect.succeed({
-            items: input.items,
-            truncated: false,
-            cursorAdvance: input.cursorAdvance,
-          });
-        }
-        const decoded = decodePullRequestListJson(raw);
-        if (!Result.isSuccess(decoded)) {
-          return Effect.fail(
-            new AzureDevOpsPullRequestReadError({
-              command: "az",
-              cwd: input.cwd,
-              operation: "listPullRequests",
-              cause: decoded.failure,
-            }),
-          );
-        }
-
-        const lastItemIndex = decoded.success.rawIndexes[remaining - 1];
+    return input.page(input.skip, top).pipe(
+      Effect.flatMap((batch) => {
+        const lastItemIndex = batch.rawIndexes[remaining - 1];
         if (lastItemIndex !== undefined) {
           const consumed = lastItemIndex + 1;
           return Effect.succeed({
-            items: [...input.items, ...decoded.success.items.slice(0, remaining)],
-            truncated: consumed < decoded.success.rawCount || decoded.success.rawCount === top,
+            items: [...input.items, ...batch.items.slice(0, remaining)],
+            truncated: consumed < batch.rawCount || batch.rawCount === top,
             cursorAdvance: input.cursorAdvance + consumed,
           });
         }
 
-        const items = [...input.items, ...decoded.success.items];
-        if (decoded.success.rawCount < top) {
+        const items = [...input.items, ...batch.items];
+        if (batch.rawCount < top) {
           return Effect.succeed({
             items,
             truncated: false,
-            cursorAdvance: input.cursorAdvance + decoded.success.rawCount,
+            cursorAdvance: input.cursorAdvance + batch.rawCount,
           });
         }
-        return listPullRequestPage({
+        return collectPullRequests({
           ...input,
-          skip: input.skip + decoded.success.rawCount,
-          cursorAdvance: input.cursorAdvance + decoded.success.rawCount,
+          skip: input.skip + batch.rawCount,
+          cursorAdvance: input.cursorAdvance + batch.rawCount,
           items,
         });
       }),
     );
+  };
+
+  const cliPullRequestPage =
+    (input: PullRequestListInput) =>
+    (
+      skip: number,
+      top: number,
+    ): Effect.Effect<AzureDevOpsPullRequestBatch, AzureDevOpsPullRequestCliError> =>
+      executeJson({
+        cwd: input.cwd,
+        maxOutputBytes: PULL_REQUEST_LIST_MAX_OUTPUT_BYTES,
+        args: [
+          "repos",
+          "pr",
+          "list",
+          ...detectArgs,
+          "--repository",
+          input.repository,
+          "--status",
+          azureStatus(input.state),
+          ...involvementArgs(input),
+          ...(input.author === undefined || input.involvement === "authored"
+            ? []
+            : ["--creator", input.author]),
+          "--include-links",
+          ...(skip === 0 ? [] : ["--skip", String(skip)]),
+          "--top",
+          String(top),
+        ],
+      }).pipe(
+        Effect.flatMap((result) => {
+          const raw = result.stdout.trim();
+          if (raw.length === 0) return Effect.succeed(EMPTY_PULL_REQUEST_BATCH);
+          const decoded = decodePullRequestListJson(raw);
+          return Result.isSuccess(decoded)
+            ? Effect.succeed(decoded.success)
+            : Effect.fail(
+                new AzureDevOpsPullRequestReadError({
+                  command: "az",
+                  cwd: input.cwd,
+                  operation: "listPullRequests",
+                  cause: decoded.failure,
+                }),
+              );
+        }),
+      );
+
+  /** Pages REST lists for the ids `--creator` and `--reviewer` would resolve the identities to. */
+  const restPullRequestPager = Effect.fn("AzureDevOpsPullRequestCli.restPullRequestPager")(
+    function* (route: AzureDevOpsRouting.AzureDevOpsRestRoute, input: PullRequestListInput) {
+      const credentials = AzureDevOpsRouting.credentials(route);
+      // The token's own user, as `--creator me` resolves it.
+      const viewerId =
+        input.involvement === "all"
+          ? undefined
+          : (yield* rest.json(
+              {
+                ...credentials,
+                operation: "listPullRequests",
+                path: "_apis/connectionData",
+                apiVersion: "7.1-preview",
+              },
+              RestViewerIdSchema,
+            )).authenticatedUser.id;
+      const author =
+        input.author === undefined || input.involvement === "authored" ? undefined : input.author;
+      const authorId =
+        author === undefined
+          ? undefined
+          : (yield* rest.json(
+              {
+                ...credentials,
+                operation: "listPullRequests",
+                area: "ims",
+                path: "_apis/identities",
+                query: { searchFilter: "General", filterValue: author, queryMembership: "None" },
+              },
+              RestIdentitiesSchema,
+            )).value[0]?.id;
+      if (author !== undefined && authorId === undefined) {
+        return yield* new AzureDevOpsRest.AzureDevOpsRestError({
+          operation: "listPullRequests",
+          reason: "response",
+          serverMessage: `Could not resolve identity: ${author}`,
+        });
+      }
+      return (skip: number, top: number) =>
+        restRead(
+          route,
+          {
+            operation: "listPullRequests",
+            path: `${AzureDevOpsRest.repositoryPath(route.project, input.repository)}/pullrequests`,
+            query: {
+              "searchCriteria.status": azureStatus(input.state),
+              "searchCriteria.creatorId": input.involvement === "authored" ? viewerId : authorId,
+              "searchCriteria.reviewerId": input.involvement === "reviewing" ? viewerId : undefined,
+              "searchCriteria.includeLinks": true,
+              $skip: skip === 0 ? undefined : skip,
+              $top: top,
+            },
+            maxResponseBytes: PULL_REQUEST_LIST_MAX_OUTPUT_BYTES,
+          },
+          decodePullRequestPageJson,
+        );
+    },
+  );
+
+  const collectPolicyChecks = Effect.fn("AzureDevOpsPullRequestCli.collectPolicyChecks")(function* (
+    cwd: string,
+    page: (
+      skip: number,
+    ) => Effect.Effect<AzureDevOpsPolicyCheckPage, AzureDevOpsPullRequestCliError>,
+  ) {
+    const checks: PullRequestCheck[] = [];
+    for (let skip = 0; skip < MAX_POLICY_EVALUATIONS; skip += POLICY_EVALUATIONS_PER_PAGE) {
+      const answer = yield* page(skip);
+      checks.push(...answer.checks);
+      if (answer.rawCount < POLICY_EVALUATIONS_PER_PAGE) return sortChecks(checks);
+    }
+    return yield* new AzureDevOpsPullRequestReadError({
+      command: "az",
+      cwd,
+      operation: "listPolicyChecks",
+      cause: "Policy evaluations exceeded the read limit",
+    });
+  });
+
+  const collectIterationChanges = (
+    page: (skip: number) => Effect.Effect<AzureDevOpsChangePage, AzureDevOpsPullRequestCliError>,
+  ) => {
+    const from = (
+      skip: number,
+      collected: ReadonlyArray<AzureDevOpsChangeEntry>,
+    ): Effect.Effect<AzureDevOpsIterationChanges, AzureDevOpsPullRequestCliError> =>
+      page(skip).pipe(
+        Effect.flatMap((answer) => {
+          const changes = [...collected, ...answer.changes];
+          if (answer.nextSkip === null) return Effect.succeed({ changes, truncated: false });
+          return answer.nextSkip <= skip || answer.nextSkip >= MAX_CHANGE_ENTRIES
+            ? Effect.succeed({ changes, truncated: true })
+            : from(answer.nextSkip, changes);
+        }),
+      );
+    return from(0, []);
   };
 
   const cliViewer = (input: { readonly cwd: string }) =>
@@ -581,53 +728,63 @@ export const make = Effect.gen(function* () {
     }),
 
     listPullRequests: Effect.fn("AzureDevOpsPullRequestCli.listPullRequests")(function (input) {
-      return listPullRequestPage({
-        cwd: input.cwd,
-        repository: input.repository,
-        state: input.state,
-        involvement: input.involvement,
-        viewer: input.viewer,
-        author: input.author,
-        limit: input.limit,
-        skip: input.cursor?.delivered ?? 0,
-        cursorAdvance: 0,
-        items: [],
+      const collect = (page: Parameters<typeof collectPullRequests>[0]["page"]) =>
+        collectPullRequests({
+          limit: input.limit,
+          skip: input.cursor?.delivered ?? 0,
+          cursorAdvance: 0,
+          items: [],
+          page,
+        });
+      return AzureDevOpsRouting.byRoute(routing, input, {
+        rest: (route) => restPullRequestPager(route, input).pipe(Effect.flatMap(collect)),
+        cli: () => collect(cliPullRequestPage(input)),
       });
     }),
 
     getPullRequest: Effect.fn("AzureDevOpsPullRequestCli.getPullRequest")(function (input) {
-      return executeJson({
-        cwd: input.cwd,
-        args: ["repos", "pr", "show", ...detectArgs, "--id", String(input.number)],
-      }).pipe(
-        Effect.flatMap(
-          (result): Effect.Effect<AzureDevOpsPullRequest, AzureDevOpsPullRequestCliError> => {
-            const decoded = decodePullRequestJson(result.stdout.trim());
-            if (!Result.isSuccess(decoded)) {
-              return Effect.fail(
-                new AzureDevOpsPullRequestReadError({
-                  command: "az",
-                  cwd: input.cwd,
-                  operation: "getPullRequest",
-                  cause: decoded.failure,
-                }),
-              );
-            }
-            return decoded.success === null
-              ? Effect.fail(
-                  new AzureDevOpsPullRequestIncompleteError({
-                    command: "az",
-                    cwd: input.cwd,
-                    number: input.number,
-                  }),
-                )
-              : Effect.succeed(decoded.success);
-          },
-        ),
-      );
+      const complete = (
+        pullRequest: AzureDevOpsPullRequest | null,
+      ): Effect.Effect<AzureDevOpsPullRequest, AzureDevOpsPullRequestCliError> =>
+        pullRequest === null
+          ? Effect.fail(
+              new AzureDevOpsPullRequestIncompleteError({
+                command: "az",
+                cwd: input.cwd,
+                number: input.number,
+              }),
+            )
+          : Effect.succeed(pullRequest);
+      return AzureDevOpsRouting.byRoute(routing, input, {
+        rest: (route) =>
+          restRead(
+            route,
+            { operation: "getPullRequest", path: `_apis/git/pullrequests/${input.number}` },
+            decodePullRequestJson,
+          ).pipe(Effect.flatMap(complete)),
+        cli: () =>
+          executeJson({
+            cwd: input.cwd,
+            args: ["repos", "pr", "show", ...detectArgs, "--id", String(input.number)],
+          }).pipe(
+            Effect.flatMap((result) => {
+              const decoded = decodePullRequestJson(result.stdout.trim());
+              return Result.isSuccess(decoded)
+                ? complete(decoded.success)
+                : Effect.fail(
+                    new AzureDevOpsPullRequestReadError({
+                      command: "az",
+                      cwd: input.cwd,
+                      operation: "getPullRequest",
+                      cause: decoded.failure,
+                    }),
+                  );
+            }),
+          ),
+      });
     }),
 
-    listPolicyChecks: Effect.fn("AzureDevOpsPullRequestCli.listPolicyChecks")(function* (input) {
+    listPolicyChecks: Effect.fn("AzureDevOpsPullRequestCli.listPolicyChecks")(function (input) {
       const unreadable = (cause: unknown) =>
         new AzureDevOpsPullRequestReadError({
           command: "az",
@@ -635,91 +792,168 @@ export const make = Effect.gen(function* () {
           operation: "listPolicyChecks",
           cause,
         });
-      const checks: PullRequestCheck[] = [];
-      for (let skip = 0; skip < MAX_POLICY_EVALUATIONS; skip += POLICY_EVALUATIONS_PER_PAGE) {
-        const result = yield* executeJson({
-          cwd: input.cwd,
-          args: [
-            "repos",
-            "pr",
-            "policy",
-            "list",
-            ...detectArgs,
-            "--id",
-            String(input.number),
-            "--top",
-            String(POLICY_EVALUATIONS_PER_PAGE),
-            "--skip",
-            String(skip),
-          ],
-        });
-        if (result.stdoutTruncated) return yield* unreadable("Policy output was truncated");
-        const page = decodePolicyChecksJson(result.stdout.trim(), { isDraft: input.isDraft });
-        if (!Result.isSuccess(page)) return yield* unreadable(page.failure);
-        checks.push(...page.success.checks);
-        if (page.success.rawCount < POLICY_EVALUATIONS_PER_PAGE) return sortChecks(checks);
-      }
-      return yield* unreadable("Policy evaluations exceeded the read limit");
+      return AzureDevOpsRouting.byRoute(routing, input, {
+        // The artifact names the project by id, which only the pull request states.
+        rest: (route) =>
+          rest
+            .json(
+              {
+                ...AzureDevOpsRouting.credentials(route),
+                operation: "listPolicyChecks",
+                path: `_apis/git/pullrequests/${input.number}`,
+              },
+              RestPullRequestProjectSchema,
+            )
+            .pipe(
+              Effect.flatMap(({ repository: { project } }) =>
+                collectPolicyChecks(input.cwd, (skip) =>
+                  restRead(
+                    route,
+                    {
+                      operation: "listPolicyChecks",
+                      path: `${encodeURIComponent(project.id)}/_apis/policy/evaluations`,
+                      apiVersion: "7.1-preview",
+                      query: {
+                        artifactId: `vstfs:///CodeReview/CodeReviewId/${project.id}/${input.number}`,
+                        $top: POLICY_EVALUATIONS_PER_PAGE,
+                        $skip: skip,
+                      },
+                    },
+                    (raw) => decodePolicyChecksPageJson(raw, { isDraft: input.isDraft }),
+                  ),
+                ),
+              ),
+            ),
+        cli: () =>
+          collectPolicyChecks(input.cwd, (skip) =>
+            executeJson({
+              cwd: input.cwd,
+              args: [
+                "repos",
+                "pr",
+                "policy",
+                "list",
+                ...detectArgs,
+                "--id",
+                String(input.number),
+                "--top",
+                String(POLICY_EVALUATIONS_PER_PAGE),
+                "--skip",
+                String(skip),
+              ],
+            }).pipe(
+              Effect.flatMap((result) => {
+                if (result.stdoutTruncated) {
+                  return Effect.fail(unreadable("Policy output was truncated"));
+                }
+                const page = decodePolicyChecksJson(result.stdout.trim(), {
+                  isDraft: input.isDraft,
+                });
+                return Result.isSuccess(page)
+                  ? Effect.succeed(page.success)
+                  : Effect.fail(unreadable(page.failure));
+              }),
+            ),
+          ),
+      });
     }),
 
     listThreads: Effect.fn("AzureDevOpsPullRequestCli.listThreads")(function (input) {
-      return invoke({
-        cwd: input.cwd,
-        operation: "listThreads",
-        resource: "pullRequestThreads",
-        routeParameters: pullRequestRoute(input),
-        maxOutputBytes: REVIEW_HISTORY_MAX_OUTPUT_BYTES,
-        decode: decodeThreadsJson,
+      return AzureDevOpsRouting.byRoute(routing, input, {
+        rest: (route) =>
+          restRead(
+            route,
+            {
+              operation: "listThreads",
+              path: `${restPullRequestPath(input)}/threads`,
+              maxResponseBytes: REVIEW_HISTORY_MAX_OUTPUT_BYTES,
+            },
+            decodeThreadsJson,
+          ),
+        cli: () =>
+          invoke({
+            cwd: input.cwd,
+            operation: "listThreads",
+            resource: "pullRequestThreads",
+            routeParameters: pullRequestRoute(input),
+            maxOutputBytes: REVIEW_HISTORY_MAX_OUTPUT_BYTES,
+            decode: decodeThreadsJson,
+          }),
       });
     }),
 
     listLabels: Effect.fn("AzureDevOpsPullRequestCli.listLabels")(function (input) {
-      return invoke({
-        cwd: input.cwd,
-        operation: "listLabels",
-        resource: "pullRequestLabels",
-        routeParameters: pullRequestRoute(input),
-        decode: decodeLabelsJson,
+      return AzureDevOpsRouting.byRoute(routing, input, {
+        rest: (route) =>
+          restRead(
+            route,
+            { operation: "listLabels", path: `${restPullRequestPath(input)}/labels` },
+            decodeLabelsJson,
+          ),
+        cli: () =>
+          invoke({
+            cwd: input.cwd,
+            operation: "listLabels",
+            resource: "pullRequestLabels",
+            routeParameters: pullRequestRoute(input),
+            decode: decodeLabelsJson,
+          }),
       });
     }),
 
     listIterations: Effect.fn("AzureDevOpsPullRequestCli.listIterations")(function (input) {
-      return invoke({
-        cwd: input.cwd,
-        operation: "listIterations",
-        resource: "pullRequestIterations",
-        routeParameters: pullRequestRoute(input),
-        maxOutputBytes: REVIEW_HISTORY_MAX_OUTPUT_BYTES,
-        decode: decodeIterationsJson,
+      return AzureDevOpsRouting.byRoute(routing, input, {
+        rest: (route) =>
+          restRead(
+            route,
+            {
+              operation: "listIterations",
+              path: `${restPullRequestPath(input)}/iterations`,
+              maxResponseBytes: REVIEW_HISTORY_MAX_OUTPUT_BYTES,
+            },
+            decodeIterationsJson,
+          ),
+        cli: () =>
+          invoke({
+            cwd: input.cwd,
+            operation: "listIterations",
+            resource: "pullRequestIterations",
+            routeParameters: pullRequestRoute(input),
+            maxOutputBytes: REVIEW_HISTORY_MAX_OUTPUT_BYTES,
+            decode: decodeIterationsJson,
+          }),
       });
     }),
 
     listIterationChanges: Effect.fn("AzureDevOpsPullRequestCli.listIterationChanges")(
       function (input) {
-        const page = (skip: number) =>
-          invoke({
-            cwd: input.cwd,
-            operation: "listIterationChanges",
-            resource: "pullRequestIterationChanges",
-            routeParameters: [...pullRequestRoute(input), `iterationId=${input.iterationId}`],
-            queryParameters: [`$top=${CHANGE_ENTRIES_PER_PAGE}`, `$skip=${skip}`],
-            maxOutputBytes: CHANGE_ENTRIES_MAX_OUTPUT_BYTES,
-            decode: decodeIterationChangesJson,
-          });
-        const from = (
-          skip: number,
-          collected: ReadonlyArray<AzureDevOpsChangeEntry>,
-        ): Effect.Effect<AzureDevOpsIterationChanges, AzureDevOpsPullRequestCliError> =>
-          page(skip).pipe(
-            Effect.flatMap((answer) => {
-              const changes = [...collected, ...answer.changes];
-              if (answer.nextSkip === null) return Effect.succeed({ changes, truncated: false });
-              return answer.nextSkip <= skip || answer.nextSkip >= MAX_CHANGE_ENTRIES
-                ? Effect.succeed({ changes, truncated: true })
-                : from(answer.nextSkip, changes);
-            }),
-          );
-        return from(0, []);
+        return AzureDevOpsRouting.byRoute(routing, input, {
+          rest: (route) =>
+            collectIterationChanges((skip) =>
+              restRead(
+                route,
+                {
+                  operation: "listIterationChanges",
+                  path: `${restPullRequestPath(input)}/iterations/${input.iterationId}/changes`,
+                  query: { $top: CHANGE_ENTRIES_PER_PAGE, $skip: skip },
+                  maxResponseBytes: CHANGE_ENTRIES_MAX_OUTPUT_BYTES,
+                },
+                decodeIterationChangesJson,
+              ),
+            ),
+          cli: () =>
+            collectIterationChanges((skip) =>
+              invoke({
+                cwd: input.cwd,
+                operation: "listIterationChanges",
+                resource: "pullRequestIterationChanges",
+                routeParameters: [...pullRequestRoute(input), `iterationId=${input.iterationId}`],
+                queryParameters: [`$top=${CHANGE_ENTRIES_PER_PAGE}`, `$skip=${skip}`],
+                maxOutputBytes: CHANGE_ENTRIES_MAX_OUTPUT_BYTES,
+                decode: decodeIterationChangesJson,
+              }),
+            ),
+        });
       },
     ),
 
@@ -738,82 +972,129 @@ export const make = Effect.gen(function* () {
           operation: "readBlobs",
           cause,
         });
-      return yield* Effect.scoped(
-        Effect.gen(function* () {
-          const directory = yield* fileSystem
-            .makeTempDirectoryScoped({ prefix: "t3-azure-blobs-" })
-            .pipe(Effect.mapError(readFailure));
-          const request = `${directory}/ids.json`;
-          // invoke refuses to overwrite its output, so the archive gets a name nothing holds yet.
-          const archive = `${directory}/blobs.zip`;
-          yield* fileSystem
-            .writeFileString(
-              request,
-              `[${[...requested.values()].map((id) => `"${id}"`).join(",")}]`,
-            )
-            .pipe(Effect.mapError(readFailure));
-          yield* azure.execute({
-            cwd: input.cwd,
-            args: [
-              "devops",
-              "invoke",
-              ...detectArgs,
-              "--area",
-              "git",
-              "--resource",
-              "blobs",
-              "--api-version",
-              REST_API_VERSION,
-              "--route-parameters",
-              ...repositoryRoute(input.location),
-              "--http-method",
-              "POST",
-              "--in-file",
-              request,
-              "--accept-media-type",
-              "application/zip",
-              "--out-file",
-              archive,
-              "--only-show-errors",
-            ],
-          });
-          const size = yield* fileSystem.stat(archive).pipe(
-            Effect.map((info) => Number(info.size)),
-            Effect.mapError(readFailure),
-          );
-          const contents = new Map<string, AzureDevOpsItemContent>();
-          if (size > BLOB_ARCHIVE_MAX_BYTES) return contents;
-          const zip = yield* fileSystem.readFile(archive).pipe(Effect.mapError(readFailure));
-          const entries = readBlobZip(zip, BLOB_MAX_BYTES, BLOB_BATCH_MAX_BYTES);
-          if (entries === null) return yield* readFailure("Azure returned an unreadable archive.");
-          for (const [id, bytes] of entries) {
-            const content = requested.has(id) ? blobContent(bytes) : null;
-            if (content !== null) contents.set(id, content);
-          }
-          return contents;
-        }),
-      );
+      const unpack = (zip: Uint8Array) => {
+        const entries = readBlobZip(zip, BLOB_MAX_BYTES, BLOB_BATCH_MAX_BYTES);
+        if (entries === null) {
+          return Effect.fail(readFailure("Azure returned an unreadable archive."));
+        }
+        const contents = new Map<string, AzureDevOpsItemContent>();
+        for (const [id, bytes] of entries) {
+          const content = requested.has(id) ? blobContent(bytes) : null;
+          if (content !== null) contents.set(id, content);
+        }
+        return Effect.succeed(contents);
+      };
+      return yield* AzureDevOpsRouting.byRoute(routing, input, {
+        rest: (route) =>
+          rest
+            .request({
+              ...AzureDevOpsRouting.credentials(route),
+              operation: "readBlobs",
+              method: "POST",
+              path: `${AzureDevOpsRest.repositoryPath(input.location.project, input.location.repository)}/blobs`,
+              body: [...requested.values()],
+              accept: "application/zip",
+              maxResponseBytes: BLOB_ARCHIVE_MAX_BYTES,
+            })
+            .pipe(
+              Effect.flatMap((answer) =>
+                answer.truncated
+                  ? Effect.succeed(new Map<string, AzureDevOpsItemContent>())
+                  : unpack(answer.bytes),
+              ),
+            ),
+        cli: () =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const directory = yield* fileSystem
+                .makeTempDirectoryScoped({ prefix: "t3-azure-blobs-" })
+                .pipe(Effect.mapError(readFailure));
+              const request = `${directory}/ids.json`;
+              // invoke refuses to overwrite its output, so the archive gets a name nothing holds yet.
+              const archive = `${directory}/blobs.zip`;
+              yield* fileSystem
+                .writeFileString(
+                  request,
+                  `[${[...requested.values()].map((id) => `"${id}"`).join(",")}]`,
+                )
+                .pipe(Effect.mapError(readFailure));
+              yield* azure.execute({
+                cwd: input.cwd,
+                args: [
+                  "devops",
+                  "invoke",
+                  ...detectArgs,
+                  "--area",
+                  "git",
+                  "--resource",
+                  "blobs",
+                  "--api-version",
+                  REST_API_VERSION,
+                  "--route-parameters",
+                  ...repositoryRoute(input.location),
+                  "--http-method",
+                  "POST",
+                  "--in-file",
+                  request,
+                  "--accept-media-type",
+                  "application/zip",
+                  "--out-file",
+                  archive,
+                  "--only-show-errors",
+                ],
+              });
+              const size = yield* fileSystem.stat(archive).pipe(
+                Effect.map((info) => Number(info.size)),
+                Effect.mapError(readFailure),
+              );
+              if (size > BLOB_ARCHIVE_MAX_BYTES) return new Map<string, AzureDevOpsItemContent>();
+              const zip = yield* fileSystem.readFile(archive).pipe(Effect.mapError(readFailure));
+              return yield* unpack(zip);
+            }),
+          ),
+      });
     }),
 
     readItemContent: Effect.fn("AzureDevOpsPullRequestCli.readItemContent")(function (input) {
-      return invoke({
-        cwd: input.cwd,
-        operation: "readItemContent",
-        resource: "items",
-        routeParameters: repositoryRoute(input.location),
-        queryParameters: [
-          // `az devops invoke` does not escape query values, so `#` or `&` in a path would truncate it.
-          `path=${encodeURIComponent(toItemPath(input.path))}`,
-          "versionDescriptor.versionType=commit",
-          `versionDescriptor.version=${input.commit}`,
-          "includeContent=true",
-          // Encoded content cannot identify binaries; request Azure's binary flag.
-          "includeContentMetadata=true",
-          // `az devops invoke` requires JSON; otherwise Azure returns raw file bytes.
-          "$format=json",
-        ],
-        maxOutputBytes: ITEM_CONTENT_MAX_OUTPUT_BYTES,
-        decode: decodeItemContentJson,
+      return AzureDevOpsRouting.byRoute(routing, input, {
+        rest: (route) =>
+          restRead(
+            route,
+            {
+              operation: "readItemContent",
+              path: `${AzureDevOpsRest.repositoryPath(input.location.project, input.location.repository)}/items`,
+              query: {
+                path: toItemPath(input.path),
+                "versionDescriptor.versionType": "commit",
+                "versionDescriptor.version": input.commit,
+                includeContent: true,
+                includeContentMetadata: true,
+                $format: "json",
+              },
+              maxResponseBytes: ITEM_CONTENT_MAX_OUTPUT_BYTES,
+            },
+            decodeItemContentJson,
+          ),
+        cli: () =>
+          invoke({
+            cwd: input.cwd,
+            operation: "readItemContent",
+            resource: "items",
+            routeParameters: repositoryRoute(input.location),
+            queryParameters: [
+              // `az devops invoke` does not escape query values, so `#` or `&` in a path would truncate it.
+              `path=${encodeURIComponent(toItemPath(input.path))}`,
+              "versionDescriptor.versionType=commit",
+              `versionDescriptor.version=${input.commit}`,
+              "includeContent=true",
+              // Encoded content cannot identify binaries; request Azure's binary flag.
+              "includeContentMetadata=true",
+              // `az devops invoke` requires JSON; otherwise Azure returns raw file bytes.
+              "$format=json",
+            ],
+            maxOutputBytes: ITEM_CONTENT_MAX_OUTPUT_BYTES,
+            decode: decodeItemContentJson,
+          }),
       });
     }),
 

@@ -282,6 +282,7 @@ function toPullRequest(
 }
 
 const decodeUnknownList = decodeJsonResult(Schema.Array(Schema.Unknown));
+const decodeUnknownPage = decodeJsonResult(Schema.Struct({ value: Schema.Array(Schema.Unknown) }));
 const decodePullRequestEntry = Schema.decodeUnknownExit(RawPullRequestSchema);
 const decodePullRequest = decodeJsonResult(RawPullRequestSchema);
 const decodeThreadPage = decodeJsonResult(RawThreadPageSchema);
@@ -290,6 +291,9 @@ const decodeViewer = decodeJsonResult(RawViewerSchema);
 const decodeLabelPage = decodeJsonResult(Schema.Struct({ value: Schema.Array(Schema.Unknown) }));
 const decodeLabelEntry = Schema.decodeUnknownExit(RawLabelSchema);
 const decodePolicyEvaluations = decodeJsonResult(Schema.Array(RawPolicyEvaluationSchema));
+const decodePolicyEvaluationPage = decodeJsonResult(
+  Schema.Struct({ value: Schema.Array(RawPolicyEvaluationSchema) }),
+);
 
 type DecodeFailure = Cause.Cause<Schema.SchemaError>;
 
@@ -300,16 +304,10 @@ export interface AzureDevOpsPullRequestBatch {
   readonly rawCount: number;
 }
 
-export function decodePullRequestListJson(
-  raw: string,
-): Result.Result<AzureDevOpsPullRequestBatch, DecodeFailure> {
-  const decoded = decodeUnknownList(raw);
-  if (!Result.isSuccess(decoded)) {
-    return Result.fail(decoded.failure);
-  }
+function toPullRequestBatch(entries: ReadonlyArray<unknown>): AzureDevOpsPullRequestBatch {
   const items: AzureDevOpsPullRequest[] = [];
   const rawIndexes: number[] = [];
-  for (const [rawIndex, entry] of decoded.success.entries()) {
+  for (const [rawIndex, entry] of entries.entries()) {
     const item = decodePullRequestEntry(entry);
     if (Exit.isFailure(item)) continue;
     const pullRequest = toPullRequest(item.value);
@@ -318,7 +316,21 @@ export function decodePullRequestListJson(
       rawIndexes.push(rawIndex);
     }
   }
-  return Result.succeed({ items, rawIndexes, rawCount: decoded.success.length });
+  return { items, rawIndexes, rawCount: entries.length };
+}
+
+/** `az repos pr list` prints the bare array. */
+export function decodePullRequestListJson(
+  raw: string,
+): Result.Result<AzureDevOpsPullRequestBatch, DecodeFailure> {
+  return Result.map(decodeUnknownList(raw), toPullRequestBatch);
+}
+
+/** REST wraps the same rows in `value`. */
+export function decodePullRequestPageJson(
+  raw: string,
+): Result.Result<AzureDevOpsPullRequestBatch, DecodeFailure> {
+  return Result.map(decodeUnknownPage(raw), (page) => toPullRequestBatch(page.value));
 }
 
 /** Null means Azure returned insufficient data. */
@@ -473,20 +485,37 @@ export interface AzureDevOpsPolicyCheckPage {
   readonly rawCount: number;
 }
 
+function toPolicyCheckPage(
+  evaluations: ReadonlyArray<RawPolicyEvaluation>,
+  isDraft: boolean,
+): AzureDevOpsPolicyCheckPage {
+  return {
+    checks: evaluations.flatMap((evaluation) => {
+      const check = toPolicyCheck(evaluation, isDraft);
+      return check === null ? [] : [check];
+    }),
+    rawCount: evaluations.length,
+  };
+}
+
 /** Unlike the tolerant decoders above, one bad row fails the page: a lost required check reads as passed. */
 export function decodePolicyChecksJson(
   raw: string,
   input: { readonly isDraft: boolean },
 ): Result.Result<AzureDevOpsPolicyCheckPage, DecodeFailure> {
-  const decoded = decodePolicyEvaluations(raw);
-  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
-  return Result.succeed({
-    checks: decoded.success.flatMap((evaluation) => {
-      const check = toPolicyCheck(evaluation, input.isDraft);
-      return check === null ? [] : [check];
-    }),
-    rawCount: decoded.success.length,
-  });
+  return Result.map(decodePolicyEvaluations(raw), (evaluations) =>
+    toPolicyCheckPage(evaluations, input.isDraft),
+  );
+}
+
+/** REST wraps the evaluations `az repos pr policy list` prints in `value`. */
+export function decodePolicyChecksPageJson(
+  raw: string,
+  input: { readonly isDraft: boolean },
+): Result.Result<AzureDevOpsPolicyCheckPage, DecodeFailure> {
+  return Result.map(decodePolicyEvaluationPage(raw), (page) =>
+    toPolicyCheckPage(page.value, input.isDraft),
+  );
 }
 
 const RawIterationSchema = Schema.Struct({

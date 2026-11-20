@@ -8,6 +8,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/http";
@@ -378,3 +379,29 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(AzureDevOpsRest, make);
+
+/** `{project}/_apis/git/repositories/{repository}`, each name escaped: project names hold spaces. */
+export const repositoryPath = (project: string, repository: string) =>
+  `${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repository)}`;
+
+/**
+ * Decodes an answer with a decoder that also reads `az` output, so both paths normalize alike.
+ * An answer cut off at `maxResponseBytes` fails rather than decoding as a shorter list.
+ */
+export const decodeAnswer =
+  <A>(operation: string, decode: (raw: string) => Result.Result<A, unknown>) =>
+  (answer: AzureDevOpsRestResponse): Effect.Effect<A, AzureDevOpsRestError> => {
+    const decoded = answer.truncated
+      ? Result.fail("The answer exceeded its size limit.")
+      : decode(textOf(answer.bytes));
+    return Result.isSuccess(decoded)
+      ? Effect.succeed(decoded.success)
+      : Effect.fail(
+          new AzureDevOpsRestError({
+            operation,
+            reason: "response",
+            status: answer.status,
+            cause: decoded.failure,
+          }),
+        );
+  };

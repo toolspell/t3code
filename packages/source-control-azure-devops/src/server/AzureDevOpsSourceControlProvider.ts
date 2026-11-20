@@ -132,6 +132,10 @@ function repositoryNameFromRemote(remoteUrl: string): string | null {
   return name.startsWith("@") ? null : name;
 }
 
+/** A REST failure ran no command. */
+const commandOf = (error: object) =>
+  "command" in error && typeof error.command === "string" ? { command: error.command } : {};
+
 /** The remote T3 selected, which scopes `az` instead of the checkout's primary remote. */
 const remoteOf = (input: { readonly context?: { readonly remoteUrl: string } | undefined }) =>
   input.context === undefined ? {} : { remoteUrl: input.context.remoteUrl };
@@ -203,7 +207,7 @@ export const make = Effect.gen(function* () {
                 new SourceControlProviderError({
                   provider: SourceControlProviderKind.make("azure-devops"),
                   operation: "listChangeRequests",
-                  command: error.command,
+                  ...commandOf(error),
                   cwd: input.cwd,
                   reference: SourceControlProvider.transportSafeSourceControlErrorValue(
                     input.headSelector,
@@ -226,7 +230,7 @@ export const make = Effect.gen(function* () {
                 new SourceControlProviderError({
                   provider: SourceControlProviderKind.make("azure-devops"),
                   operation: "getChangeRequest",
-                  command: error.command,
+                  ...commandOf(error),
                   cwd: input.cwd,
                   reference: SourceControlProvider.transportSafeSourceControlErrorValue(
                     input.reference,
@@ -258,7 +262,7 @@ export const make = Effect.gen(function* () {
                 new SourceControlProviderError({
                   provider: SourceControlProviderKind.make("azure-devops"),
                   operation: "createChangeRequest",
-                  command: error.command,
+                  ...commandOf(error),
                   cwd: input.cwd,
                   reference: SourceControlProvider.transportSafeSourceControlErrorValue(
                     input.headSelector,
@@ -284,7 +288,7 @@ export const make = Effect.gen(function* () {
                 new SourceControlProviderError({
                   provider: SourceControlProviderKind.make("azure-devops"),
                   operation: "getRepositoryCloneUrls",
-                  command: error.command,
+                  ...commandOf(error),
                   cwd: input.cwd,
                   repository: SourceControlProvider.transportSafeSourceControlErrorValue(
                     input.repository,
@@ -304,7 +308,7 @@ export const make = Effect.gen(function* () {
               new SourceControlProviderError({
                 provider: SourceControlProviderKind.make("azure-devops"),
                 operation: "createRepository",
-                command: error.command,
+                ...commandOf(error),
                 cwd: input.cwd,
                 repository: SourceControlProvider.transportSafeSourceControlErrorValue(
                   input.repository,
@@ -327,7 +331,7 @@ export const make = Effect.gen(function* () {
               new SourceControlProviderError({
                 provider: SourceControlProviderKind.make("azure-devops"),
                 operation: "getDefaultBranch",
-                command: error.command,
+                ...commandOf(error),
                 cwd: input.cwd,
                 detail: error.detail,
                 cause: error,
@@ -373,7 +377,7 @@ export const make = Effect.gen(function* () {
               : new SourceControlProviderError({
                   provider: SourceControlProviderKind.make("azure-devops"),
                   operation: "checkoutChangeRequest",
-                  command: error.command,
+                  ...commandOf(error),
                   cwd: input.cwd,
                   reference: SourceControlProvider.transportSafeSourceControlErrorValue(
                     input.reference,

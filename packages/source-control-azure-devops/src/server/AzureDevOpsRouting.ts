@@ -24,6 +24,12 @@ export type AzureDevOpsRoute =
 
 export type AzureDevOpsRestRoute = Extract<AzureDevOpsRoute, { readonly _tag: "Rest" }>;
 
+/** What every REST request on the route carries. */
+export const credentials = (route: AzureDevOpsRestRoute) => ({
+  organizationUrl: route.organizationUrl,
+  token: route.token,
+});
+
 /** The organization has a saved token the server cannot read; it must not fall back to `az`. */
 export class AzureDevOpsTokenUnavailableError extends Schema.TaggedError<AzureDevOpsTokenUnavailableError>()(
   "AzureDevOpsTokenUnavailableError",

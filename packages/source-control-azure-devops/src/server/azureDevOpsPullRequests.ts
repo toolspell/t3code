@@ -182,28 +182,46 @@ function normalizeAzureDevOpsPullRequestRecord(
 }
 
 const decodeAzureDevOpsPullRequestList = decodeJsonResult(Schema.Array(Schema.Unknown));
+const decodeAzureDevOpsPullRequestPage = decodeJsonResult(
+  Schema.Struct({ value: Schema.Array(Schema.Unknown) }),
+);
 const decodeAzureDevOpsPullRequest = decodeJsonResult(AzureDevOpsPullRequestSchema);
 const decodeAzureDevOpsPullRequestEntry = Schema.decodeUnknownExit(AzureDevOpsPullRequestSchema);
 
+function normalizeAzureDevOpsPullRequestEntries(
+  entries: ReadonlyArray<unknown>,
+): ReadonlyArray<NormalizedAzureDevOpsPullRequestRecord> {
+  const pullRequests: NormalizedAzureDevOpsPullRequestRecord[] = [];
+  for (const entry of entries) {
+    const decodedEntry = decodeAzureDevOpsPullRequestEntry(entry);
+    if (Exit.isFailure(decodedEntry)) {
+      continue;
+    }
+    pullRequests.push(normalizeAzureDevOpsPullRequestRecord(decodedEntry.value));
+  }
+  return pullRequests;
+}
+
+/** `az repos pr list` prints the bare array. */
 export function decodeAzureDevOpsPullRequestListJson(
   raw: string,
 ): Result.Result<
   ReadonlyArray<NormalizedAzureDevOpsPullRequestRecord>,
   Cause.Cause<Schema.SchemaError>
 > {
-  const result = decodeAzureDevOpsPullRequestList(raw);
-  if (Result.isSuccess(result)) {
-    const pullRequests: NormalizedAzureDevOpsPullRequestRecord[] = [];
-    for (const entry of result.success) {
-      const decodedEntry = decodeAzureDevOpsPullRequestEntry(entry);
-      if (Exit.isFailure(decodedEntry)) {
-        continue;
-      }
-      pullRequests.push(normalizeAzureDevOpsPullRequestRecord(decodedEntry.value));
-    }
-    return Result.succeed(pullRequests);
-  }
-  return Result.fail(result.failure);
+  return Result.map(decodeAzureDevOpsPullRequestList(raw), normalizeAzureDevOpsPullRequestEntries);
+}
+
+/** REST wraps the same rows in `value`. */
+export function decodeAzureDevOpsPullRequestPageJson(
+  raw: string,
+): Result.Result<
+  ReadonlyArray<NormalizedAzureDevOpsPullRequestRecord>,
+  Cause.Cause<Schema.SchemaError>
+> {
+  return Result.map(decodeAzureDevOpsPullRequestPage(raw), (page) =>
+    normalizeAzureDevOpsPullRequestEntries(page.value),
+  );
 }
 
 export function decodeAzureDevOpsPullRequestJson(

@@ -2,17 +2,21 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it, afterEach, describe, expect, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/http";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/process";
 import { VcsProcessExitError, VcsProcessSpawnError } from "@t3tools/contracts";
 
 import type * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
+import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import { AzureCliInstallLocation, type AzureCliInstall } from "./azureCliLauncher.ts";
 import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
+import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
+import * as AzureDevOpsRouting from "./AzureDevOpsRouting.ts";
 import { primaryRemoteUrl, scopeAzureCliArgs } from "./AzureDevOpsCli.ts";
 
 const processOutput = (stdout: string): SourceControlHost.SourceControlProcessOutput => ({
@@ -37,7 +41,15 @@ const layerSupport = Layer.mergeAll(
   NodeServices.layer,
   Layer.succeed(HostProcess.Platform, "linux"),
 );
-const layer = Layer.mergeAll(AzureDevOpsCli.layer.pipe(Layer.provide(layerSupport)), layerSupport);
+// No saved token: every call takes the Azure CLI, and REST must not be reached.
+const layer = Layer.mergeAll(
+  AzureDevOpsCli.layer.pipe(
+    Layer.provide(AzureDevOpsRouting.layer),
+    Layer.provide(Layer.mock(AzureDevOpsRest.AzureDevOpsRest)({})),
+    Layer.provide(layerSupport),
+  ),
+  layerSupport,
+);
 
 afterEach(() => {
   mockRun.mockReset();
@@ -390,6 +402,164 @@ describe("AzureDevOpsCli.layer", () => {
       assert.strictEqual(error.cause, cause);
     }).pipe(Effect.provide(layer)),
   );
+});
+
+describe("AzureDevOpsCli over REST", () => {
+  /** `saveToken(false)` runs a call through `az`, `saveToken(true)` through `respond`. */
+  function routed(respond: (request: HttpClientRequest.HttpClientRequest) => Response) {
+    const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+    const az = vi.fn<SourceControlHost.SourceControlHost["Service"]["process"]["run"]>(() =>
+      Effect.die("An organization with a saved token must not reach az."),
+    );
+    const support = Layer.mergeAll(
+      TestSourceControlHost.layer({
+        process: {
+          run: (input) =>
+            input.command === "git"
+              ? Effect.succeed(
+                  processOutput(
+                    "origin\thttps://dev.azure.com/contoso/Web%20Site/_git/web%20app (fetch)\n",
+                  ),
+                )
+              : az(input),
+        },
+      }),
+      NodeServices.layer,
+      Layer.succeed(HostProcess.Platform, "linux"),
+    );
+    const layer = AzureDevOpsCli.layer.pipe(
+      Layer.provide(AzureDevOpsRouting.layer),
+      Layer.provide(
+        AzureDevOpsRest.layer.pipe(
+          Layer.provide(SourceControlRateLimit.layer),
+          Layer.provide(
+            Layer.succeed(
+              HttpClient.HttpClient,
+              HttpClient.make((request) => {
+                requests.push(request);
+                return Effect.succeed(HttpClientResponse.fromWeb(request, respond(request)));
+              }),
+            ),
+          ),
+        ),
+      ),
+      Layer.provideMerge(support),
+    );
+    const saveToken = TestSourceControlHost.TestSourceControlHostSettings.use((settings) =>
+      settings.update({
+        sourceControlHosts: {
+          "azure-devops": { tokens: { "https://dev.azure.com/contoso": "contoso-pat" } },
+        },
+      }),
+    );
+    return { requests, az, layer, saveToken };
+  }
+
+  const pullRequest = {
+    pullRequestId: 42,
+    title: "Add the page",
+    sourceRefName: "refs/heads/user/feat#1",
+    targetRefName: "refs/heads/main",
+    lastMergeSourceCommit: { commitId: "a".repeat(40) },
+    status: "active",
+    creationDate: "2026-07-01T00:00:00.1234567Z",
+    repository: {
+      name: "web app",
+      webUrl: "https://dev.azure.com/contoso/Web%20Site/_git/web%20app",
+      project: { name: "Web Site" },
+    },
+  };
+  const repository = {
+    name: "repo",
+    webUrl: "https://dev.azure.com/contoso/Other%20Project/_git/repo",
+    remoteUrl: "https://contoso@dev.azure.com/contoso/Other%20Project/_git/repo",
+    sshUrl: "git@ssh.dev.azure.com:v3/contoso/Other%20Project/repo",
+    project: { name: "Other Project" },
+    defaultBranch: "refs/heads/trunk",
+  };
+  type Az = AzureDevOpsCli.AzureDevOpsCli["Service"];
+
+  it.effect.each([
+    {
+      read: "a branch's pull requests",
+      call: (az: Az) =>
+        az.listPullRequests({ cwd: "/w", headSelector: "user/feat#1", state: "open", limit: 5 }),
+      body: { count: 1, value: [pullRequest] },
+      azOutput: [pullRequest],
+      path: "/contoso/Web%20Site/_apis/git/repositories/web%20app/pullrequests",
+      query: {
+        "searchCriteria.sourceRefName": "refs/heads/user/feat#1",
+        "searchCriteria.status": "active",
+        $top: "5",
+      },
+    },
+    {
+      read: "a fully named source ref's pull requests",
+      call: (az: Az) =>
+        az.listPullRequests({
+          cwd: "/w",
+          headSelector: "fallback",
+          source: { refName: "refs/pull/7/merge" },
+          state: "all",
+        }),
+      body: { count: 0, value: [] },
+      azOutput: [],
+      path: "/contoso/Web%20Site/_apis/git/repositories/web%20app/pullrequests",
+      query: {
+        "searchCriteria.sourceRefName": "refs/pull/7/merge",
+        "searchCriteria.status": "all",
+        $top: "20",
+      },
+    },
+    {
+      read: "a pull request by its URL",
+      call: (az: Az) =>
+        az.getPullRequest({
+          cwd: "/w",
+          reference: "https://dev.azure.com/contoso/Web%20Site/_git/web%20app/pullrequest/42",
+        }),
+      body: pullRequest,
+      azOutput: pullRequest,
+      path: "/contoso/_apis/git/pullrequests/42",
+      query: {},
+    },
+    {
+      read: "another project's clone URLs",
+      call: (az: Az) => az.getRepositoryCloneUrls({ cwd: "/w", repository: "Other Project/repo" }),
+      body: repository,
+      azOutput: repository,
+      path: "/contoso/Other%20Project/_apis/git/repositories/repo",
+      query: {},
+    },
+    {
+      read: "the remote's default branch",
+      call: (az: Az) => az.getDefaultBranch({ cwd: "/w", repository: "web app" }),
+      body: repository,
+      azOutput: repository,
+      path: "/contoso/Web%20Site/_apis/git/repositories/web%20app",
+      query: {},
+    },
+  ])("reads $read over REST as az reads it", ({ call, body, azOutput, path, query }) => {
+    const { requests, az, layer, saveToken } = routed(() => Response.json(body));
+    return Effect.gen(function* () {
+      const cli = yield* AzureDevOpsCli.AzureDevOpsCli;
+      az.mockReturnValue(Effect.succeed(processOutput(JSON.stringify(azOutput))));
+      const viaCli = yield* call(cli);
+      az.mockClear();
+      yield* saveToken;
+
+      assert.deepStrictEqual(yield* call(cli), viaCli);
+      expect(az).not.toHaveBeenCalled();
+      const [request] = requests;
+      assert.isDefined(request);
+      const url = new URL(request.url);
+      assert.strictEqual(url.pathname, path);
+      assert.strictEqual(url.searchParams.get("api-version"), "7.1");
+      for (const [name, value] of Object.entries(query)) {
+        assert.strictEqual(url.searchParams.get(name), value, name);
+      }
+    }).pipe(Effect.provide(layer));
+  });
 });
 
 describe("azureCliInvocation", () => {

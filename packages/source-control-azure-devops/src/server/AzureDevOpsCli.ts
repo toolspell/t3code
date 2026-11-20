@@ -13,14 +13,18 @@ import {
 } from "@t3tools/contracts";
 
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
+import type * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import { AzureCliInstallLocation } from "./azureCliLauncher.ts";
 import {
   decodeAzureDevOpsPullRequestJson,
   decodeAzureDevOpsPullRequestListJson,
+  decodeAzureDevOpsPullRequestPageJson,
   type NormalizedAzureDevOpsPullRequestRecord,
 } from "./azureDevOpsPullRequests.ts";
+import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
+import * as AzureDevOpsRouting from "./AzureDevOpsRouting.ts";
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -207,6 +211,13 @@ export const AzureDevOpsCliError = Schema.Union([
 ]);
 export type AzureDevOpsCliError = typeof AzureDevOpsCliError.Type;
 
+/** A read that an organization with a saved token sends over REST instead. */
+export type AzureDevOpsReadError =
+  | AzureDevOpsCliError
+  | AzureDevOpsRest.AzureDevOpsRestError
+  | SourceControlRateLimit.SourceControlRateLimitPausedError
+  | AzureDevOpsRouting.AzureDevOpsTokenUnavailableError;
+
 export interface AzureDevOpsRepositoryCloneUrls {
   readonly nameWithOwner: string;
   readonly url: string;
@@ -233,19 +244,22 @@ export class AzureDevOpsCli extends Context.Service<
       readonly state: "open" | "closed" | "merged" | "all";
       readonly limit?: number;
       readonly remoteUrl?: string;
-    }) => Effect.Effect<ReadonlyArray<NormalizedAzureDevOpsPullRequestRecord>, AzureDevOpsCliError>;
+    }) => Effect.Effect<
+      ReadonlyArray<NormalizedAzureDevOpsPullRequestRecord>,
+      AzureDevOpsReadError
+    >;
 
     readonly getPullRequest: (input: {
       readonly cwd: string;
       readonly reference: string;
       readonly remoteUrl?: string;
-    }) => Effect.Effect<NormalizedAzureDevOpsPullRequestRecord, AzureDevOpsCliError>;
+    }) => Effect.Effect<NormalizedAzureDevOpsPullRequestRecord, AzureDevOpsReadError>;
 
     readonly getRepositoryCloneUrls: (input: {
       readonly cwd: string;
       readonly repository: string;
       readonly remoteUrl?: string;
-    }) => Effect.Effect<AzureDevOpsRepositoryCloneUrls, AzureDevOpsCliError>;
+    }) => Effect.Effect<AzureDevOpsRepositoryCloneUrls, AzureDevOpsReadError>;
 
     readonly createRepository: (input: {
       readonly cwd: string;
@@ -268,7 +282,7 @@ export class AzureDevOpsCli extends Context.Service<
       readonly cwd: string;
       readonly repository: string;
       readonly remoteUrl?: string;
-    }) => Effect.Effect<string | null, AzureDevOpsCliError>;
+    }) => Effect.Effect<string | null, AzureDevOpsReadError>;
   }
 >()("@t3tools/source-control-azure-devops/server/AzureDevOpsCli") {}
 
@@ -555,6 +569,8 @@ export const textOption = (option: string, value: string) =>
 /** @public */
 export const make = Effect.gen(function* () {
   const { process } = yield* SourceControlHost.SourceControlHost;
+  const rest = yield* AzureDevOpsRest.AzureDevOpsRest;
+  const routing = yield* AzureDevOpsRouting.AzureDevOpsRouting;
   const invocation = yield* azureCliInvocation();
 
   const execute: AzureDevOpsCli["Service"]["execute"] = Effect.fn("AzureDevOpsCli.execute")(
@@ -601,6 +617,155 @@ export const make = Effect.gen(function* () {
       args: [...input.args, "--only-show-errors", "--output", "json"],
     });
 
+  type ListInput = Parameters<AzureDevOpsCli["Service"]["listPullRequests"]>[0];
+  const cliListPullRequests = (input: ListInput, branch: string, refPrefix: string) =>
+    executeJson({
+      cwd: input.cwd,
+      ...remoteOf(input),
+      args: [
+        "repos",
+        "pr",
+        "list",
+        "--detect",
+        "true",
+        "--source-branch",
+        // az puts this in the query string unescaped; a `#` would cut the request.
+        refPrefix + encodeURIComponent(branch.slice(refPrefix.length)),
+        "--status",
+        toAzureStatus(input.state),
+        "--top",
+        String(input.limit ?? 20),
+      ],
+    }).pipe(
+      Effect.map((result) => result.stdout.trim()),
+      Effect.flatMap((raw) =>
+        raw.length === 0
+          ? Effect.succeed([])
+          : Effect.sync(() => decodeAzureDevOpsPullRequestListJson(raw)).pipe(
+              Effect.flatMap((decoded) => {
+                if (!Result.isSuccess(decoded)) {
+                  return Effect.fail(
+                    new AzureDevOpsPullRequestListDecodeError({
+                      operation: "listPullRequests",
+                      command: "az",
+                      cwd: input.cwd,
+                      outputLength: raw.length,
+                      cause: decoded.failure,
+                    }),
+                  );
+                }
+
+                return Effect.succeed(decoded.success);
+              }),
+            ),
+      ),
+    );
+
+  const cliGetPullRequest = (input: Parameters<AzureDevOpsCli["Service"]["getPullRequest"]>[0]) =>
+    executeJson({
+      cwd: input.cwd,
+      ...remoteOf(input),
+      args: [
+        "repos",
+        "pr",
+        "show",
+        "--detect",
+        "true",
+        "--id",
+        normalizeChangeRequestId(input.reference),
+      ],
+    }).pipe(
+      Effect.map((result) => result.stdout.trim()),
+      Effect.flatMap((raw) =>
+        Effect.sync(() => decodeAzureDevOpsPullRequestJson(raw)).pipe(
+          Effect.flatMap((decoded) => {
+            if (!Result.isSuccess(decoded)) {
+              return Effect.fail(
+                new AzureDevOpsPullRequestDecodeError({
+                  operation: "getPullRequest",
+                  command: "az",
+                  cwd: input.cwd,
+                  outputLength: raw.length,
+                  cause: decoded.failure,
+                }),
+              );
+            }
+
+            return Effect.succeed(decoded.success);
+          }),
+        ),
+      ),
+    );
+
+  type RepositoryInput = Parameters<AzureDevOpsCli["Service"]["getRepositoryCloneUrls"]>[0];
+  /** A named project wins, as for `az repos show --project`; otherwise the remote's. */
+  const restRepository = (
+    route: AzureDevOpsRouting.AzureDevOpsRestRoute,
+    specifier: string,
+    operation: typeof AzureDevOpsRepositoryDecodeOperation.Type,
+  ) => {
+    const repository = parseRepositorySpecifier(specifier);
+    return rest.json(
+      {
+        ...AzureDevOpsRouting.credentials(route),
+        operation,
+        path: AzureDevOpsRest.repositoryPath(repository.project ?? route.project, repository.name),
+      },
+      RawAzureDevOpsRepositorySchema,
+    );
+  };
+
+  const cliGetRepositoryCloneUrls = (input: RepositoryInput) => {
+    const repository = parseRepositorySpecifier(input.repository);
+    return executeJson({
+      cwd: input.cwd,
+      ...remoteOf(input),
+      args: [
+        "repos",
+        "show",
+        "--detect",
+        "true",
+        "--repository",
+        repository.name,
+        ...(repository.project ? ["--project", repository.project] : []),
+      ],
+    }).pipe(
+      Effect.map((result) => result.stdout.trim()),
+      Effect.flatMap((raw) =>
+        decodeAzureDevOpsJson(
+          raw,
+          RawAzureDevOpsRepositorySchema,
+          "getRepositoryCloneUrls",
+          input.cwd,
+        ),
+      ),
+      Effect.map(normalizeRepositoryCloneUrls),
+    );
+  };
+
+  const cliGetDefaultBranch = (input: RepositoryInput) => {
+    const repository = parseRepositorySpecifier(input.repository);
+    return executeJson({
+      cwd: input.cwd,
+      ...remoteOf(input),
+      args: [
+        "repos",
+        "show",
+        "--detect",
+        "true",
+        // Joined so a name starting with `-` stays the option's value.
+        `--repository=${repository.name}`,
+        ...(repository.project ? ["--project", repository.project] : []),
+      ],
+    }).pipe(
+      Effect.map((result) => result.stdout.trim()),
+      Effect.flatMap((raw) =>
+        decodeAzureDevOpsJson(raw, RawAzureDevOpsRepositorySchema, "getDefaultBranch", input.cwd),
+      ),
+      Effect.map((repo) => normalizeDefaultBranch(repo.defaultBranch)),
+    );
+  };
+
   return AzureDevOpsCli.of({
     execute,
     listPullRequests: Effect.fn("AzureDevOpsCli.listPullRequests")(function (input) {
@@ -609,111 +774,67 @@ export const make = Effect.gen(function* () {
       const refPrefix =
         ["refs/heads/", "refs/pull/", "refs/tags/"].find((prefix) => branch.startsWith(prefix)) ??
         "";
-      return executeJson({
-        cwd: input.cwd,
-        ...remoteOf(input),
-        args: [
-          "repos",
-          "pr",
-          "list",
-          "--detect",
-          "true",
-          "--source-branch",
-          // az puts this in the query string unescaped; a `#` would cut the request.
-          refPrefix + encodeURIComponent(branch.slice(refPrefix.length)),
-          "--status",
-          toAzureStatus(input.state),
-          "--top",
-          String(input.limit ?? 20),
-        ],
-      }).pipe(
-        Effect.map((result) => result.stdout.trim()),
-        Effect.flatMap((raw) =>
-          raw.length === 0
-            ? Effect.succeed([])
-            : Effect.sync(() => decodeAzureDevOpsPullRequestListJson(raw)).pipe(
-                Effect.flatMap((decoded) => {
-                  if (!Result.isSuccess(decoded)) {
-                    return Effect.fail(
-                      new AzureDevOpsPullRequestListDecodeError({
-                        operation: "listPullRequests",
-                        command: "az",
-                        cwd: input.cwd,
-                        outputLength: raw.length,
-                        cause: decoded.failure,
-                      }),
-                    );
-                  }
-
-                  return Effect.succeed(decoded.success);
-                }),
+      return AzureDevOpsRouting.byRoute(routing, input, {
+        rest: (route) =>
+          rest
+            .request({
+              ...AzureDevOpsRouting.credentials(route),
+              operation: "listPullRequests",
+              path: `${AzureDevOpsRest.repositoryPath(route.project, route.repository)}/pullrequests`,
+              query: {
+                // az qualifies a bare branch name the same way.
+                "searchCriteria.sourceRefName": refPrefix === "" ? `refs/heads/${branch}` : branch,
+                "searchCriteria.status": toAzureStatus(input.state),
+                $top: input.limit ?? 20,
+              },
+            })
+            .pipe(
+              Effect.flatMap(
+                AzureDevOpsRest.decodeAnswer(
+                  "listPullRequests",
+                  decodeAzureDevOpsPullRequestPageJson,
+                ),
               ),
-        ),
-      );
+            ),
+        cli: () => cliListPullRequests(input, branch, refPrefix),
+      });
     }),
     getPullRequest: Effect.fn("AzureDevOpsCli.getPullRequest")(function (input) {
-      return executeJson({
-        cwd: input.cwd,
-        ...remoteOf(input),
-        args: [
-          "repos",
-          "pr",
-          "show",
-          "--detect",
-          "true",
-          "--id",
-          normalizeChangeRequestId(input.reference),
-        ],
-      }).pipe(
-        Effect.map((result) => result.stdout.trim()),
-        Effect.flatMap((raw) =>
-          Effect.sync(() => decodeAzureDevOpsPullRequestJson(raw)).pipe(
-            Effect.flatMap((decoded) => {
-              if (!Result.isSuccess(decoded)) {
-                return Effect.fail(
-                  new AzureDevOpsPullRequestDecodeError({
-                    operation: "getPullRequest",
-                    command: "az",
-                    cwd: input.cwd,
-                    outputLength: raw.length,
-                    cause: decoded.failure,
-                  }),
-                );
-              }
-
-              return Effect.succeed(decoded.success);
-            }),
-          ),
-        ),
-      );
+      return AzureDevOpsRouting.byRoute(routing, input, {
+        rest: (route) =>
+          rest
+            .request({
+              ...AzureDevOpsRouting.credentials(route),
+              operation: "getPullRequest",
+              path: `_apis/git/pullrequests/${encodeURIComponent(normalizeChangeRequestId(input.reference))}`,
+            })
+            .pipe(
+              Effect.flatMap(
+                AzureDevOpsRest.decodeAnswer("getPullRequest", decodeAzureDevOpsPullRequestJson),
+              ),
+            ),
+        cli: () => cliGetPullRequest(input),
+      });
     }),
     getRepositoryCloneUrls: Effect.fn("AzureDevOpsCli.getRepositoryCloneUrls")(function (input) {
-      const repository = parseRepositorySpecifier(input.repository);
-      return executeJson({
-        cwd: input.cwd,
-        ...remoteOf(input),
-        args: [
-          "repos",
-          "show",
-          "--detect",
-          "true",
-          "--repository",
-          repository.name,
-          ...(repository.project ? ["--project", repository.project] : []),
-        ],
-      }).pipe(
-        Effect.map((result) => result.stdout.trim()),
-        Effect.flatMap((raw) =>
-          decodeAzureDevOpsJson(
-            raw,
-            RawAzureDevOpsRepositorySchema,
-            "getRepositoryCloneUrls",
-            input.cwd,
+      return AzureDevOpsRouting.byRoute(routing, input, {
+        rest: (route) =>
+          restRepository(route, input.repository, "getRepositoryCloneUrls").pipe(
+            Effect.map(normalizeRepositoryCloneUrls),
           ),
-        ),
-        Effect.map(normalizeRepositoryCloneUrls),
-      );
+        cli: () => cliGetRepositoryCloneUrls(input),
+      });
     }),
+    getDefaultBranch: Effect.fn("AzureDevOpsCli.getDefaultBranch")(function (input) {
+      return AzureDevOpsRouting.byRoute(routing, input, {
+        rest: (route) =>
+          restRepository(route, input.repository, "getDefaultBranch").pipe(
+            Effect.map((repo) => normalizeDefaultBranch(repo.defaultBranch)),
+          ),
+        cli: () => cliGetDefaultBranch(input),
+      });
+    }),
+
     createRepository: Effect.fn("AzureDevOpsCli.createRepository")(function (input) {
       const repository = parseRepositorySpecifier(input.repository);
       // Project/organization permissions control visibility; `az repos create` has no flag.
@@ -758,28 +879,6 @@ export const make = Effect.gen(function* () {
         ],
         ...(title.stdin === undefined ? {} : { stdin: title.stdin }),
       }).pipe(Effect.asVoid);
-    }),
-    getDefaultBranch: Effect.fn("AzureDevOpsCli.getDefaultBranch")(function (input) {
-      const repository = parseRepositorySpecifier(input.repository);
-      return executeJson({
-        cwd: input.cwd,
-        ...remoteOf(input),
-        args: [
-          "repos",
-          "show",
-          "--detect",
-          "true",
-          // Joined so a name starting with `-` stays the option's value.
-          `--repository=${repository.name}`,
-          ...(repository.project ? ["--project", repository.project] : []),
-        ],
-      }).pipe(
-        Effect.map((result) => result.stdout.trim()),
-        Effect.flatMap((raw) =>
-          decodeAzureDevOpsJson(raw, RawAzureDevOpsRepositorySchema, "getDefaultBranch", input.cwd),
-        ),
-        Effect.map((repo) => normalizeDefaultBranch(repo.defaultBranch)),
-      );
     }),
   });
 });
