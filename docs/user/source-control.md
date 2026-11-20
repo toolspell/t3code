@@ -104,12 +104,43 @@ preserve that file.
 
 ### Azure DevOps
 
-Install [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/), add the DevOps extension, and sign in:
+T3 Code reaches Azure DevOps Services (`dev.azure.com`) with a personal access token per
+organization, or through Azure CLI for organizations without one.
+
+**Personal access tokens:** open **Settings → Source control & issues**, expand **Azure DevOps**, and
+under **Personal access tokens** enter the organization (its name or any URL inside it) and a
+token. Azure DevOps no longer accepts one token for every organization, so each organization needs
+its own. Give the token these scopes:
+
+- **Code (Read & write)** for pull requests, files, and reviews
+- **Work Items (Read & write)** for issues
+- **Identity (Read)** to find reviewers and assignees by name
+- **Project and Team (Read)** to suggest assignees
+- **Code (Read, write, & manage)** as well, to publish new repositories
+
+The token is kept in the server's secret store and applies right away. Each saved organization
+shows who the token signs in as, or what is wrong: a rejected token, missing scopes, or an
+organization that does not exist. Use **Replace** to enter a new token for an organization, or
+**Remove** to clear it. An organization with a token never uses Azure CLI, even when a request
+fails.
+
+**Azure CLI:** for every other organization, install
+[Azure CLI](https://learn.microsoft.com/en-us/cli/azure/), add the DevOps extension, and sign in:
 
 ```bash
 az extension add --name azure-devops
 az login
 ```
+
+Cloning and pushing use Git's own credentials for Azure DevOps, such as an SSH key or a credential
+helper, not the personal access token.
+
+To name reviewers or assignees, use an email address or a name that matches one person. A name
+that matches several people is refused with the candidates listed.
+
+**Publish Repository** asks which organization to create the repository in when tokens are saved,
+offering the organizations whose token works. Enter the repository as `project/repository`.
+Without a saved token, Azure CLI's default organization is used.
 
 ### GitCafe
 
