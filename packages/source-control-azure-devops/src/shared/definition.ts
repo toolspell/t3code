@@ -109,6 +109,14 @@ export const definition = defineSourceControl({
   publishDescription: "dev.azure.com",
   publishHost: () => "dev.azure.com",
   newRepositoryOwner: () => null,
+  // Saved tokens are keyed `https://dev.azure.com/{organization}`; the server creates over REST there.
+  // Only organizations whose saved token passed the check; publishing with a failing one would fail.
+  publishNamespaces: (auth) =>
+    (auth.accounts ?? []).flatMap((entry) => {
+      if (!entry.authenticated) return [];
+      const organization = /^https:\/\/dev\.azure\.com\/([^/]+)\/?$/iu.exec(entry.host)?.[1];
+      return organization ? [decodeUrlPathSegment(organization)] : [];
+    }),
   defaultCloneTransport: "ssh",
   changeRequestUrl: ({ host, repository, number, remoteUrl, webUrl }) => {
     if (webUrl) return changeRequestUrlBelow(webUrl, `pullrequest/${number}`);

@@ -4,6 +4,7 @@ import {
   makeSourceControlDefinitionRegistry,
   recognizeRemoteWith,
 } from "@t3tools/source-control-core/shared/definition";
+import * as Option from "effect/Option";
 import { describe, expect, it } from "vite-plus/test";
 
 import { definition } from "./definition.ts";
@@ -296,5 +297,30 @@ describe("Azure DevOps issue scope", () => {
     expect(
       definition.parseIssueUrl?.(new URL("https://dev.azure.com/acme/_workitems/edit/9")),
     ).toBeNull();
+  });
+});
+
+describe("Azure DevOps publish namespaces", () => {
+  it("offers each organization with a saved token, whatever its check said", () => {
+    const entry = { account: "Max", active: false };
+    expect(
+      definition.publishNamespaces?.({
+        status: "authenticated",
+        account: Option.none(),
+        host: Option.none(),
+        detail: Option.none(),
+        accounts: [
+          { ...entry, host: "https://dev.azure.com/toolspell", authenticated: true },
+          { ...entry, host: "https://dev.azure.com/my%20org", authenticated: true },
+          {
+            ...entry,
+            host: "https://dev.azure.com/contoso-demo",
+            authenticated: false,
+            error: "rejected",
+          },
+          { ...entry, host: "https://tfs.example.test/collection", authenticated: true },
+        ],
+      }),
+    ).toEqual(["toolspell", "my org"]);
   });
 });

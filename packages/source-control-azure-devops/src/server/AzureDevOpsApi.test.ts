@@ -268,6 +268,49 @@ describe("AzureDevOpsApi.layer", () => {
     }).pipe(Effect.provide(layer)),
   );
 
+  it.effect.each([
+    {
+      repository: "project/repo",
+      scope: ["--detect", "true"],
+    },
+    {
+      repository: "fabrikam/project/repo",
+      scope: ["--detect", "false", "--organization", "https://dev.azure.com/fabrikam"],
+    },
+  ])("creates $repository with az when no token is saved", ({ repository, scope }) =>
+    Effect.gen(function* () {
+      mockRun.mockReturnValueOnce(
+        Effect.succeed(
+          processOutput(
+            JSON.stringify({
+              name: "repo",
+              webUrl: "https://dev.azure.com/acme/project/_git/repo",
+              remoteUrl: "https://dev.azure.com/acme/project/_git/repo",
+              sshUrl: "git@ssh.dev.azure.com:v3/acme/project/repo",
+              project: { name: "project" },
+            }),
+          ),
+        ),
+      );
+
+      const az = yield* AzureDevOpsApi.AzureDevOpsApi;
+      yield* az.createRepository({ cwd: "/new", repository, visibility: "private" });
+
+      assert.deepStrictEqual(mockRun.mock.calls.at(-1)?.[0].args, [
+        "repos",
+        "create",
+        ...scope,
+        "--name",
+        "repo",
+        "--project",
+        "project",
+        "--only-show-errors",
+        "--output",
+        "json",
+      ]);
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("percent-encodes the source branch while preserving recognized ref prefixes", () =>
     Effect.gen(function* () {
       mockRun.mockReturnValueOnce(Effect.succeed(processOutput("[]")));
@@ -639,6 +682,51 @@ describe("AzureDevOpsApi over REST", () => {
       expect(bodyOf(requests[1])).toEqual({ name: "repo", project: { id: "project-id" } });
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect(
+    "creates a repository in the chosen organization with that organization's token",
+    () => {
+      const { requests, az, layer } = routed((request) =>
+        request.method === "GET" ? Response.json({ id: "project-id" }) : Response.json(repository),
+      );
+      return Effect.gen(function* () {
+        yield* TestSourceControlHost.TestSourceControlHostSettings.use((settings) =>
+          settings.update({
+            sourceControlHosts: {
+              "azure-devops": {
+                tokens: {
+                  "https://dev.azure.com/contoso": "contoso-pat",
+                  "https://dev.azure.com/fabrikam": "fabrikam-pat",
+                },
+              },
+            },
+          }),
+        );
+        const cli = yield* AzureDevOpsApi.AzureDevOpsApi;
+
+        // The checkout's remote is in contoso; the chosen organization decides.
+        yield* cli.createRepository({
+          cwd: "/w",
+          repository: "Fabrikam/Other Project/repo",
+          visibility: "private",
+        });
+
+        expect(az).not.toHaveBeenCalled();
+        assert.deepStrictEqual(
+          requests.map((request) => [request.method, new URL(request.url).pathname]),
+          [
+            ["GET", "/fabrikam/_apis/projects/Other%20Project"],
+            ["POST", "/fabrikam/Other%20Project/_apis/git/repositories"],
+          ],
+        );
+        const fabrikamAuth = `Basic ${Buffer.from(":fabrikam-pat").toString("base64")}`;
+        assert.deepStrictEqual(
+          requests.map((request) => request.headers.authorization),
+          [fabrikamAuth, fabrikamAuth],
+        );
+      }).pipe(Effect.provide(layer));
+    },
+  );
 });
 
 describe("azureCliInvocation", () => {

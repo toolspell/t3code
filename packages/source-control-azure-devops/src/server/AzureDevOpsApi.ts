@@ -341,6 +341,7 @@ function normalizeRepositoryCloneUrls(
 }
 
 function parseRepositorySpecifier(repository: string): {
+  readonly organization: string | null;
   readonly project: string | null;
   readonly name: string;
 } {
@@ -352,6 +353,7 @@ function parseRepositorySpecifier(repository: string): {
     }
   }
   return {
+    organization: parts.length > 2 ? (parts.at(-3) ?? null) : null,
     project: parts.length > 1 ? (parts.at(-2) ?? null) : null,
     name: parts.at(-1) ?? repository.trim(),
   };
@@ -741,60 +743,75 @@ export const make = Effect.gen(function* () {
       });
     }),
 
-    createRepository: Effect.fn("AzureDevOpsApi.createRepository")(function (input) {
+    createRepository: Effect.fn("AzureDevOpsApi.createRepository")(function* (input) {
       const repository = parseRepositorySpecifier(input.repository);
       // Project/organization permissions control visibility; `az repos create` has no flag.
-      return AzureDevOpsRouting.byRoute(routing, input, {
-        rest: (route) => {
-          const credentials = {
-            ...AzureDevOpsRouting.credentials(route),
-            operation: "createRepository",
-          };
-          const project = repository.project ?? route.project;
-          return rest
-            .json(
-              { ...credentials, path: `_apis/projects/${encodeURIComponent(project)}` },
-              RestProjectSchema,
-            )
-            .pipe(
-              Effect.flatMap(({ id }) =>
-                rest.json(
-                  {
-                    ...credentials,
-                    method: "POST",
-                    path: `${encodeURIComponent(project)}/_apis/git/repositories`,
-                    body: { name: repository.name, project: { id } },
-                  },
-                  RawAzureDevOpsRepositorySchema,
-                ),
-              ),
-              Effect.map(normalizeRepositoryCloneUrls),
-            );
-        },
-        cli: () =>
-          executeJson({
-            cwd: input.cwd,
-            args: [
-              "repos",
-              "create",
-              "--detect",
-              "true",
-              "--name",
-              repository.name,
-              ...(repository.project ? ["--project", repository.project] : []),
-            ],
-          }).pipe(
-            Effect.map((result) => result.stdout.trim()),
-            Effect.flatMap((raw) =>
-              decodeAzureDevOpsJson(
-                raw,
+      const restCreate = (
+        route: Pick<AzureDevOpsRouting.AzureDevOpsRestRoute, "organizationUrl" | "token">,
+        project: string,
+      ) => {
+        const credentials = {
+          ...AzureDevOpsRouting.credentials(route),
+          operation: "createRepository",
+        };
+        return rest
+          .json(
+            { ...credentials, path: `_apis/projects/${encodeURIComponent(project)}` },
+            RestProjectSchema,
+          )
+          .pipe(
+            Effect.flatMap(({ id }) =>
+              rest.json(
+                {
+                  ...credentials,
+                  method: "POST",
+                  path: `${encodeURIComponent(project)}/_apis/git/repositories`,
+                  body: { name: repository.name, project: { id } },
+                },
                 RawAzureDevOpsRepositorySchema,
-                "createRepository",
-                input.cwd,
               ),
             ),
             Effect.map(normalizeRepositoryCloneUrls),
+          );
+      };
+      const cliCreate = (organizationUrl: string | null) =>
+        executeJson({
+          cwd: input.cwd,
+          args: [
+            "repos",
+            "create",
+            ...(organizationUrl === null
+              ? ["--detect", "true"]
+              : ["--detect", "false", "--organization", organizationUrl]),
+            "--name",
+            repository.name,
+            ...(repository.project ? ["--project", repository.project] : []),
+          ],
+        }).pipe(
+          Effect.map((result) => result.stdout.trim()),
+          Effect.flatMap((raw) =>
+            decodeAzureDevOpsJson(
+              raw,
+              RawAzureDevOpsRepositorySchema,
+              "createRepository",
+              input.cwd,
+            ),
           ),
+          Effect.map(normalizeRepositoryCloneUrls),
+        );
+
+      // `organization/project/repository` names the organization; it wins over the checkout's.
+      const { organization, project } = repository;
+      if (organization !== null && project !== null) {
+        const organizationUrl = `https://dev.azure.com/${encodeURIComponent(organization)}`;
+        const route = yield* routing.resolveOrganization(organizationUrl);
+        return route._tag === "Rest"
+          ? yield* restCreate(route, project)
+          : yield* cliCreate(organizationUrl);
+      }
+      return yield* AzureDevOpsRouting.byRoute(routing, input, {
+        rest: (route) => restCreate(route, project ?? route.project),
+        cli: () => cliCreate(null),
       });
     }),
     createPullRequest: Effect.fn("AzureDevOpsApi.createPullRequest")(function (input) {

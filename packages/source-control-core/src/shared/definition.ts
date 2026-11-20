@@ -4,6 +4,7 @@ import {
   type RepositoryIdentity,
   secretSetting,
   SettingsSecretValue,
+  type SourceControlProviderAuth,
   SourceControlProviderKind,
   type SourceControlProviderInfo,
   TrimmedNonEmptyString,
@@ -279,6 +280,11 @@ export interface SourceControlDefinition {
   readonly publishDescription: string;
   readonly publishHost: (signedInHost: string | null) => string;
   readonly newRepositoryOwner: (account: string | null) => { readonly owner: string | null } | null;
+  /**
+   * Namespaces a published repository must name first, such as Azure DevOps organizations with a
+   * saved token. Clients offer a choice and prefix it to the path; none keeps the path as typed.
+   */
+  readonly publishNamespaces?: (auth: SourceControlProviderAuth) => ReadonlyArray<string>;
   readonly defaultCloneTransport: "https" | "ssh";
   readonly changeRequestUrl: (input: ChangeRequestUrlInput) => string | null;
   readonly commitUrl?: (input: CommitUrlInput) => string | null;

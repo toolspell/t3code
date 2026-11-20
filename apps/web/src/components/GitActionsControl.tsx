@@ -86,6 +86,13 @@ import { Input } from "~/components/ui/input";
 import { Menu, MenuItem, MenuItemLabel, MenuPopup, MenuTrigger } from "~/components/ui/menu";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { ScrollArea } from "~/components/ui/scroll-area";
+import {
+  Select,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
 import { Textarea } from "~/components/ui/textarea";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -446,6 +453,7 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   const [selectedPublishProvider, setSelectedPublishProvider] =
     useState<SourceControlProviderKind | null>(null);
   const [publishRepositoryOverride, setPublishRepositoryOverride] = useState<string | null>(null);
+  const [selectedPublishNamespace, setSelectedPublishNamespace] = useState<string | null>(null);
   const [publishVisibility, setPublishVisibility] =
     useState<SourceControlRepositoryVisibility>("private");
   const [publishRemoteName, setPublishRemoteName] = useState("origin");
@@ -508,16 +516,24 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
       ? offeredSelection
       : (firstReadyPublishProvider ?? offeredSelection ?? sourceControlClients.get(undefined).kind);
   const selectedPublishProviderReadiness = publishProviderReadiness(publishProvider);
-  const publishAccount = publishAccountByProvider.get(publishProvider) ?? null;
-  const publishRepositoryPrefill = publishAccount ? `${publishAccount}/` : "";
-  const publishRepository = publishRepositoryOverride ?? publishRepositoryPrefill;
   const currentPublishProvider = publishProviderOption(publishProvider);
+  const publishProviderAuth = sourceControlDiscovery.data?.sourceControlProviders.find(
+    (provider) => provider.kind === publishProvider,
+  )?.auth;
+  const publishNamespaces =
+    publishProviderAuth === undefined
+      ? []
+      : (currentPublishProvider.definition.publishNamespaces?.(publishProviderAuth) ?? []);
+  const publishNamespace =
+    selectedPublishNamespace !== null && publishNamespaces.includes(selectedPublishNamespace)
+      ? selectedPublishNamespace
+      : (publishNamespaces[0] ?? null);
+  const publishAccount = publishAccountByProvider.get(publishProvider) ?? null;
+  const publishRepositoryPrefill =
+    publishAccount && publishNamespace === null ? `${publishAccount}/` : "";
+  const publishRepository = publishRepositoryOverride ?? publishRepositoryPrefill;
   const publishHost = currentPublishProvider.definition.publishHost(
-    Option.getOrNull(
-      sourceControlDiscovery.data?.sourceControlProviders.find(
-        (provider) => provider.kind === publishProvider,
-      )?.auth.host ?? Option.none(),
-    ),
+    Option.getOrNull(publishProviderAuth?.host ?? Option.none()),
   );
   const publishPathPlaceholder = currentPublishProvider.pathPlaceholder;
   const publishProviderLabel = currentPublishProvider.label;
@@ -549,7 +565,10 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
     void (async () => {
       const result = await publishRepositoryAction.run({
         provider: publishProvider,
-        repository: publishRepository.trim(),
+        repository:
+          publishNamespace === null
+            ? publishRepository.trim()
+            : `${publishNamespace}/${publishRepository.trim()}`,
         visibility: publishVisibility,
         remoteName: publishRemoteName.trim() || "origin",
         protocol: publishProtocol,
@@ -701,6 +720,33 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
                   <currentPublishProvider.Icon className="size-3.5" />
                   {publishHost}/
                 </span>
+                {publishNamespace === null ? null : (
+                  <span className="flex shrink-0 items-center border-r border-input bg-muted/50 font-mono text-xs text-muted-foreground">
+                    <Select
+                      value={publishNamespace}
+                      onValueChange={(namespace) => {
+                        if (namespace !== null) setSelectedPublishNamespace(namespace);
+                      }}
+                      disabled={publishRepositoryAction.isPending}
+                    >
+                      <SelectTrigger
+                        size="xs"
+                        variant="ghost"
+                        aria-label={gt("Organization for the new repository")}
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectPopup>
+                        {publishNamespaces.map((namespace) => (
+                          <SelectItem key={namespace} value={namespace}>
+                            {namespace}
+                          </SelectItem>
+                        ))}
+                      </SelectPopup>
+                    </Select>
+                    <span className="pe-2.5">/</span>
+                  </span>
+                )}
                 <input
                   id="publish-repository-path"
                   name="publish-repository-path"
