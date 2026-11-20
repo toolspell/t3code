@@ -20,7 +20,7 @@ import { redactedPlaceholder } from "./RedactedSensitiveText";
 /** Sentinel select value for "follow the CLI's active login"; logins never contain spaces. */
 const ACTIVE_ACCOUNT = "active cli account";
 
-function RedactedLogin(props: {
+export function RedactedLogin(props: {
   readonly account: string;
   readonly revealed: boolean;
   readonly label?: string;

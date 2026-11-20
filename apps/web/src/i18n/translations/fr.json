@@ -46,7 +46,7 @@
   "1fcffc9b1a7d921c": "Installez Jujutsu avec {command} ou depuis {url}.",
   "94168222df47e6a3": "Installez l’outil en ligne de commande GitHub ({cli}) via {url} ou votre gestionnaire de paquets (par exemple {command}).",
   "6ff697b80a1714c7": "Installez l’outil en ligne de commande GitLab ({cli}) depuis {url} ou votre gestionnaire de paquets (par exemple {command}).",
-  "929a11e234f6e5d9": "Installez les outils en ligne de commande Azure ({cli}), puis activez la prise en charge d’Azure DevOps avec {command}.",
+  "cbc820f553b229b9": "Installez les outils en ligne de commande Azure ({cli}) ou configurez un PAT.",
   "ad599e9de33538dd": "Ajoutez un jeton Bitbucket dans Paramètres → Gestion de versions et tickets.",
   "d810ecd91e8cf9d0": "Installez la CLI Origin avec {install}, puis exécutez {login}.",
   "eb0f60ef4f92ab7d": "Installez {fj} 0.6 ou version ultérieure depuis {fjUrl} et exécutez {fjLogin}, ou installez {tea} 0.16 ou version ultérieure depuis {teaUrl} et exécutez {teaLogin} pour chaque serveur Forgejo ou Gitea.",
@@ -5781,14 +5781,13 @@
   "b6a29fff7c7c0808": "Personne",
   "54420465784bb1bd": "Charger les commentaires plus anciens",
   "9d82ebf35bfb4043": "Rien ne s’est encore passé ici.",
-  "1cf216566c1ee064": "Projet indisponible",
   "b5ddadeb0810688c": "État",
   "93c1fc19d9bf1db0": "Participation",
   "d5a8b335d88b65bc": "{hidden} masqués",
   "2160067266a61dd8": "Tous",
   "cd4ec4acf33c65b9": "{count, plural, one {{count} libellé} other {{count} libellés}}",
   "bfd20acb8b7dee6b": "N’importe qui",
-  "ad208e3e32c85029": "Tout masquer",
+  "aead644e2cf1233f": "Tout afficher",
   "77ce79d865716719": "Aucun projet correspondant.",
   "af7eb4f9c7f0f575": "Filtres",
   "08247dd39b0c85ff": "Assigné",
@@ -6464,7 +6463,6 @@
   "64d0189be492147c": "Impossible d’ouvrir les détails du check",
   "600347ca50400a54": "Chargement des checks…",
   "1b381201aba745c2": "Aucun check signalé",
-  "aead644e2cf1233f": "Tout afficher",
   "a6d75a4380173c60": "Ouvrir les checks : {summary}",
   "be3d1766bad18693": "Checks : {summary}",
   "425e4a3d6c5c2867": "{count, plural, one {{count} en échec} other {{count} en échec}}",
@@ -7490,6 +7488,36 @@
   "cbff27b770de81c2": "Configuration requise",
   "1c5879d287821457": "Définir par défaut",
   "4082cde5252183e6": "Joignable à",
+  "92a97de392f4dbd6": "Jeton d’accès personnel {host}",
+  "a507057ad1d438a4": "Saisissez un nom d’organisation ou une URL dev.azure.com.",
+  "427ca5e5aa908630": "L’enregistrement remplace le jeton pour {organization}.",
+  "5d790fc12a88859d": "Aucun jeton enregistré ; le serveur utilise l’identifiant de la CLI Azure.",
+  "fcd2b0618b0b2292": "Masquer le compte de la CLI Azure",
+  "d9858aa47831392e": "Afficher le compte de la CLI Azure",
+  "929a11e234f6e5d9": "Installez les outils en ligne de commande Azure ({cli}), puis activez la prise en charge d’Azure DevOps avec {command}.",
+  "9a45e39fc525861b": "Masquer les comptes {label}",
+  "7a41204a0c474da6": "Afficher les comptes {label}",
+  "a01d8d1098bfc65a": "Un jeton d’accès personnel enregistré pour une organisation est utilisé avant l’identifiant de la CLI Azure. Chaque organisation a besoin de son propre jeton. Accordez-lui l’accès en lecture et en écriture à Code et Éléments de travail.",
+  "c3b322e041dd88da": "Créer un jeton",
+  "995cef782c8ec15f": "URL de l’organisation",
+  "1ead8d7792d7df93": "Jeton d’accès personnel",
+  "111a44209dc6e701": "Supprimer",
+  "1916a0d73520b63c": "Azure CLI",
+  "576677e88bf190d5": "Utilisé pour chaque organisation sur Azure DevOps Services sans jeton ci-dessus. Non pris en charge pour Azure DevOps Server sur site.",
+  "9e8b725de0072098": "Connecté en tant que",
+  "0c1396abaa216c14": [
+    "Non connecté. Exécutez",
+    " ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": "az login"
+    },
+    " sur l’hôte du serveur."
+  ],
+  "3e17377e88bc3c4f": "Depuis un fournisseur de secrets",
+  "26d51b395c688cc1": "Jeton refusé. Remplacez-le par un nouveau jeton.",
+  "fd90d999fcf25d96": "Impossible de vérifier le jeton.",
   "42f8550e26e9ffd9": "Équilibré",
   "e91e30033a833aaf": "Performance",
   "8c6a3ffe43dae6da": "Économie de batterie",
@@ -9661,7 +9689,6 @@
   ],
   "13d4f258e93f1dc1": "Connectez un environnement pour gérer les fournisseurs de secrets lus par ses variables de fournisseur.",
   "88466f5a03be2419": "Paramètre propre à l’environnement. Sélectionnez un environnement pour le modifier.",
-  "111a44209dc6e701": "Supprimer",
   "a3538ba5ca802bd7": [
     "Supprimer ",
     {
@@ -9744,6 +9771,7 @@
   "51497bd401292062": "Appui long",
   "9d6cc6ac23312071": "Double appui",
   "f001fa7b329c8fbf": "Masquer les réussis",
+  "ad208e3e32c85029": "Tout masquer",
   "c80e4bb3201efd71": "Zen",
   "0cb9ffcd1fb46b0c": "Statut uniquement",
   "cf0f7fc3df26fa75": "Statut et messages",
@@ -9953,6 +9981,7 @@
   "573ea5fdf293a9d6": "Tous les checkouts",
   "470ad8c54049d1e1": "Rechercher des checkouts",
   "7e2dfdd9f97fc027": "Portée des projets",
+  "1cf216566c1ee064": "Projet indisponible",
   "c1b8c351aa90f319": [
     {
       "t": "span",
@@ -10355,8 +10384,6 @@
     " options"
   ],
   "5a15598cf35f21d5": "Compte masqué",
-  "9a45e39fc525861b": "Masquer les comptes {label}",
-  "7a41204a0c474da6": "Afficher les comptes {label}",
   "08bef4c99734eb67": "Utiliser {label} sur {host}",
   "ac84c037d4bef01d": "Compte {label} pour {host}",
   "0013f3b084afe69b": "Compte {number}",
@@ -10396,7 +10423,6 @@
     },
     ", ou désactivez un hôte."
   ],
-  "9e8b725de0072098": "Connecté en tant que",
   "25d2d58cd2a8f103": [
     "Compte ",
     {
@@ -10645,7 +10671,6 @@
     },
     "."
   ],
-  "c3b322e041dd88da": "Créer un jeton",
   "ded875ce84c22d60": "Jeton",
   "c31cd9e1037af9f9": "Les messages de commit ainsi que les titres et descriptions des pull requests suivent l’historique de chaque projet.",
   "f512a778a446d715": "Préfixes Conventional Commits, avec des titres et descriptions de pull request courts.",

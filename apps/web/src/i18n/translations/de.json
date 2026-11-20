@@ -46,7 +46,7 @@
   "1fcffc9b1a7d921c": "Installiere Jujutsu mit {command} oder von {url}.",
   "94168222df47e6a3": "Installiere das GitHub-Kommandozeilentool ({cli}) über {url} oder deinen Paketmanager (zum Beispiel {command}).",
   "6ff697b80a1714c7": "Installiere das GitLab-Kommandozeilentool ({cli}) über {url} oder deinen Paketmanager (zum Beispiel {command}).",
-  "929a11e234f6e5d9": "Installiere die Azure-Kommandozeilentools ({cli}) und aktiviere dann die Azure-DevOps-Unterstützung mit {command}.",
+  "cbc820f553b229b9": "Installiere die Azure-Kommandozeilentools ({cli}) oder konfiguriere ein PAT.",
   "ad599e9de33538dd": "Füge unter Einstellungen → Versionskontrolle & Issues ein Bitbucket-Token hinzu.",
   "d810ecd91e8cf9d0": "Installiere die Origin CLI mit {install} und führe dann {login} aus.",
   "eb0f60ef4f92ab7d": "Installiere {fj} 0.6 oder neuer von {fjUrl} und führe {fjLogin} aus, oder installiere {tea} 0.16 oder neuer von {teaUrl} und führe {teaLogin} für jeden Forgejo- oder Gitea-Server aus.",
@@ -5781,14 +5781,13 @@
   "b6a29fff7c7c0808": "Niemand",
   "54420465784bb1bd": "Ältere Kommentare laden",
   "9d82ebf35bfb4043": "Hier ist noch nichts passiert.",
-  "1cf216566c1ee064": "Projekt nicht verfügbar",
   "b5ddadeb0810688c": "Status",
   "93c1fc19d9bf1db0": "Beteiligung",
   "d5a8b335d88b65bc": "{hidden} ausgeblendet",
   "2160067266a61dd8": "Beliebig",
   "cd4ec4acf33c65b9": "{count, plural, one {{count} Label} other {{count} Labels}}",
   "bfd20acb8b7dee6b": "Beliebig",
-  "ad208e3e32c85029": "Alle ausblenden",
+  "aead644e2cf1233f": "Alle anzeigen",
   "77ce79d865716719": "Keine passenden Projekte.",
   "af7eb4f9c7f0f575": "Filter",
   "08247dd39b0c85ff": "Zugewiesene Person",
@@ -6463,7 +6462,6 @@
   "64d0189be492147c": "Check-Details können nicht geöffnet werden",
   "600347ca50400a54": "Checks werden geladen…",
   "1b381201aba745c2": "Keine Checks gemeldet",
-  "aead644e2cf1233f": "Alle anzeigen",
   "a6d75a4380173c60": "Checks öffnen: {summary}",
   "be3d1766bad18693": "Checks: {summary}",
   "425e4a3d6c5c2867": "{count, plural, one {{count} fehlgeschlagen} other {{count} fehlgeschlagen}}",
@@ -7488,6 +7486,36 @@
   "cbff27b770de81c2": "Einrichtung erforderlich",
   "1c5879d287821457": "Als Standard festlegen",
   "4082cde5252183e6": "Erreichbar unter",
+  "92a97de392f4dbd6": "Persönliches Zugriffstoken für {host}",
+  "a507057ad1d438a4": "Gib einen Organisationsnamen oder eine dev.azure.com-URL ein.",
+  "427ca5e5aa908630": "Speichern ersetzt das Token für {organization}.",
+  "5d790fc12a88859d": "Kein Token gespeichert; der Server verwendet die Azure-CLI-Anmeldung.",
+  "fcd2b0618b0b2292": "Azure-CLI-Konto ausblenden",
+  "d9858aa47831392e": "Azure-CLI-Konto einblenden",
+  "929a11e234f6e5d9": "Installiere die Azure-Kommandozeilentools ({cli}) und aktiviere dann die Azure-DevOps-Unterstützung mit {command}.",
+  "9a45e39fc525861b": "{label}-Konten ausblenden",
+  "7a41204a0c474da6": "{label}-Konten einblenden",
+  "a01d8d1098bfc65a": "Ein für eine Organisation gespeichertes persönliches Zugriffstoken wird vor der Azure-CLI-Anmeldung verwendet. Jede Organisation braucht ihr eigenes Token. Gib ihm Lese- und Schreibzugriff auf Code und Arbeitselemente.",
+  "c3b322e041dd88da": "Token erstellen",
+  "995cef782c8ec15f": "Organisations-URL",
+  "1ead8d7792d7df93": "Persönliches Zugriffstoken",
+  "111a44209dc6e701": "Entfernen",
+  "1916a0d73520b63c": "Azure CLI",
+  "576677e88bf190d5": "Wird für jede Organisation in Azure DevOps Services ohne Token oben verwendet. Nicht unterstützt für On-Premises-Azure DevOps Server.",
+  "9e8b725de0072098": "Angemeldet als",
+  "0c1396abaa216c14": [
+    "Nicht angemeldet. Führe",
+    " ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": "az login"
+    },
+    " auf dem Server-Host aus."
+  ],
+  "3e17377e88bc3c4f": "Aus einem Secret-Anbieter",
+  "26d51b395c688cc1": "Token abgelehnt. Ersetze es durch ein neues Token.",
+  "fd90d999fcf25d96": "Das Token konnte nicht geprüft werden.",
   "42f8550e26e9ffd9": "Ausgewogen",
   "e91e30033a833aaf": "Leistung",
   "8c6a3ffe43dae6da": "Energiesparen",
@@ -9663,7 +9691,6 @@
   ],
   "13d4f258e93f1dc1": "Verbinde eine Umgebung, um die Geheimnisanbieter zu verwalten, aus denen ihre Anbietervariablen lesen.",
   "88466f5a03be2419": "Umgebungsweite Einstellung. Wähle eine Umgebung, um sie zu ändern.",
-  "111a44209dc6e701": "Entfernen",
   "a3538ba5ca802bd7": [
     {
       "i": 1,
@@ -9745,6 +9772,7 @@
   "51497bd401292062": "Gedrückt halten",
   "9d6cc6ac23312071": "Doppelt drücken",
   "f001fa7b329c8fbf": "Erfolgreiche ausblenden",
+  "ad208e3e32c85029": "Alle ausblenden",
   "c80e4bb3201efd71": "Zen",
   "0cb9ffcd1fb46b0c": "Nur Status",
   "cf0f7fc3df26fa75": "Status und Nachrichten",
@@ -9954,6 +9982,7 @@
   "573ea5fdf293a9d6": "Alle Checkouts",
   "470ad8c54049d1e1": "Checkouts durchsuchen",
   "7e2dfdd9f97fc027": "Projektbereich",
+  "1cf216566c1ee064": "Projekt nicht verfügbar",
   "c1b8c351aa90f319": [
     {
       "t": "span",
@@ -10356,8 +10385,6 @@
     " Optionen"
   ],
   "5a15598cf35f21d5": "Ausgeblendetes Konto",
-  "9a45e39fc525861b": "{label}-Konten ausblenden",
-  "7a41204a0c474da6": "{label}-Konten einblenden",
   "08bef4c99734eb67": "{label} auf {host} verwenden",
   "ac84c037d4bef01d": "{label}-Konto für {host}",
   "0013f3b084afe69b": "Konto {number}",
@@ -10397,7 +10424,6 @@
     },
     "-Host verwendet, oder schalte einen Host aus."
   ],
-  "9e8b725de0072098": "Angemeldet als",
   "25d2d58cd2a8f103": [
     "Aktives ",
     {
@@ -10646,7 +10672,6 @@
     },
     "."
   ],
-  "c3b322e041dd88da": "Token erstellen",
   "ded875ce84c22d60": "Token",
   "c31cd9e1037af9f9": "Commit-Nachrichten sowie Titel und Beschreibungen von Pull Requests richten sich nach dem Verlauf des jeweiligen Projekts.",
   "f512a778a446d715": "Conventional-Commit-Präfixe, mit kurzen Titeln und Beschreibungen für Pull Requests.",

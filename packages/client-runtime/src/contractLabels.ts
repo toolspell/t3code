@@ -252,13 +252,7 @@ const INSTALL_HINTS = [
       command: "`brew install glab`",
     },
   ),
-  msg(
-    "Install the Azure command-line tools ({cli}), then enable Azure DevOps support with {command}.",
-    {
-      cli: "`az`",
-      command: "`az extension add --name azure-devops`",
-    },
-  ),
+  msg("Install the Azure command-line tools ({cli}) or configure a PAT.", { cli: "`az`" }),
   msg("Add a Bitbucket token in Settings → Source control & issues."),
   msg("Install the Origin CLI with {install}, then run {login}.", {
     install: "`curl -fsSL https://downloads.cursor.com/origin/install.sh | sh`",

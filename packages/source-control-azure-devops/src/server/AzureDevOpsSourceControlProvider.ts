@@ -52,8 +52,7 @@ export const discovery = {
   // `az --version` starts Python and takes ~6s on Windows, exceeding the default probe timeout.
   probeTimeoutMs: 20_000,
   parseAuth: parseAzureAuth,
-  installHint:
-    "Install the Azure command-line tools (`az`), then enable Azure DevOps support with `az extension add --name azure-devops`.",
+  installHint: "Install the Azure command-line tools (`az`) or configure a PAT.",
 } satisfies SourceControlCliDiscoverySpec;
 
 /**

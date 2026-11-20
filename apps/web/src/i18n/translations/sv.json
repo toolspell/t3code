@@ -46,7 +46,7 @@
   "1fcffc9b1a7d921c": "Installera Jujutsu med {command} eller från {url}.",
   "94168222df47e6a3": "Installera GitHubs kommandoradsverktyg ({cli}) via {url} eller din pakethanterare (till exempel {command}).",
   "6ff697b80a1714c7": "Installera GitLabs kommandoradsverktyg ({cli}) från {url} eller din pakethanterare (till exempel {command}).",
-  "929a11e234f6e5d9": "Installera Azures kommandoradsverktyg ({cli}) och aktivera sedan stöd för Azure DevOps med {command}.",
+  "cbc820f553b229b9": "Installera Azures kommandoradsverktyg ({cli}) eller konfigurera en PAT.",
   "ad599e9de33538dd": "Lägg till en Bitbucket-token i Inställningar → Versionshantering och ärenden.",
   "d810ecd91e8cf9d0": "Installera Origin CLI med {install} och kör sedan {login}.",
   "eb0f60ef4f92ab7d": "Installera {fj} 0.6 eller senare från {fjUrl} och kör {fjLogin}, eller installera {tea} 0.16 eller senare från {teaUrl} och kör {teaLogin} för varje Forgejo- eller Gitea-server.",
@@ -5781,14 +5781,13 @@
   "b6a29fff7c7c0808": "Ingen",
   "54420465784bb1bd": "Läs in äldre kommentarer",
   "9d82ebf35bfb4043": "Inget har hänt här än.",
-  "1cf216566c1ee064": "Projektet är inte tillgängligt",
   "b5ddadeb0810688c": "Status",
   "93c1fc19d9bf1db0": "Inblandning",
   "d5a8b335d88b65bc": "{hidden} dolda",
   "2160067266a61dd8": "Alla",
   "cd4ec4acf33c65b9": "{count, plural, one {{count} etikett} other {{count} etiketter}}",
   "bfd20acb8b7dee6b": "Vem som helst",
-  "ad208e3e32c85029": "Dölj alla",
+  "aead644e2cf1233f": "Visa alla",
   "77ce79d865716719": "Inga matchande projekt.",
   "af7eb4f9c7f0f575": "Filter",
   "08247dd39b0c85ff": "Tilldelad",
@@ -6469,7 +6468,6 @@
   "64d0189be492147c": "Det gick inte att öppna kontrolldetaljer",
   "600347ca50400a54": "Läser in kontroller…",
   "1b381201aba745c2": "Inga kontroller rapporterade",
-  "aead644e2cf1233f": "Visa alla",
   "a6d75a4380173c60": "Öppna kontroller: {summary}",
   "be3d1766bad18693": "Kontroller: {summary}",
   "425e4a3d6c5c2867": "{count, plural, one {{count} misslyckades} other {{count} misslyckades}}",
@@ -7495,6 +7493,36 @@
   "cbff27b770de81c2": "Konfiguration krävs",
   "1c5879d287821457": "Ange som standard",
   "4082cde5252183e6": "Nås på",
+  "92a97de392f4dbd6": "Personlig åtkomsttoken för {host}",
+  "a507057ad1d438a4": "Ange ett organisationsnamn eller en dev.azure.com-URL.",
+  "427ca5e5aa908630": "Att spara ersätter token för {organization}.",
+  "5d790fc12a88859d": "Ingen token sparad; servern använder Azure CLI-inloggningen.",
+  "fcd2b0618b0b2292": "Dölj Azure CLI-konto",
+  "d9858aa47831392e": "Visa Azure CLI-konto",
+  "929a11e234f6e5d9": "Installera Azures kommandoradsverktyg ({cli}) och aktivera sedan stöd för Azure DevOps med {command}.",
+  "9a45e39fc525861b": "Dölj {label}-konton",
+  "7a41204a0c474da6": "Visa {label}-konton",
+  "a01d8d1098bfc65a": "En personlig åtkomsttoken som sparats för en organisation används före Azure CLI-inloggningen. Varje organisation behöver en egen token. Ge den läs- och skrivåtkomst till Kod och Arbetsobjekt.",
+  "c3b322e041dd88da": "Skapa en token",
+  "995cef782c8ec15f": "Organisations-URL",
+  "1ead8d7792d7df93": "Personlig åtkomsttoken",
+  "111a44209dc6e701": "Ta bort",
+  "1916a0d73520b63c": "Azure CLI",
+  "576677e88bf190d5": "Används för varje organisation i Azure DevOps Services utan token ovan. Stöds inte för lokal Azure DevOps Server.",
+  "9e8b725de0072098": "Inloggad som",
+  "0c1396abaa216c14": [
+    "Inte inloggad. Kör",
+    " ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": "az login"
+    },
+    " på servervärden."
+  ],
+  "3e17377e88bc3c4f": "Från en hemlighetsleverantör",
+  "26d51b395c688cc1": "Token avvisad. Ersätt den med en ny token.",
+  "fd90d999fcf25d96": "Det gick inte att kontrollera token.",
   "42f8550e26e9ffd9": "Balanserad",
   "e91e30033a833aaf": "Prestanda",
   "8c6a3ffe43dae6da": "Batterisparläge",
@@ -9669,7 +9697,6 @@
   ],
   "13d4f258e93f1dc1": "Anslut en miljö för att hantera de hemlighetsleverantörer som dess leverantörsvariabler läser från.",
   "88466f5a03be2419": "Inställning för hela miljön. Välj en miljö för att ändra den.",
-  "111a44209dc6e701": "Ta bort",
   "a3538ba5ca802bd7": [
     "Ta bort ",
     {
@@ -9752,6 +9779,7 @@
   "51497bd401292062": "Håll ned",
   "9d6cc6ac23312071": "Dubbeltryck",
   "f001fa7b329c8fbf": "Dölj lyckade",
+  "ad208e3e32c85029": "Dölj alla",
   "c80e4bb3201efd71": "Zen",
   "0cb9ffcd1fb46b0c": "Endast status",
   "cf0f7fc3df26fa75": "Status och meddelanden",
@@ -9961,6 +9989,7 @@
   "573ea5fdf293a9d6": "Alla utcheckningar",
   "470ad8c54049d1e1": "Sök utcheckningar",
   "7e2dfdd9f97fc027": "Projektomfång",
+  "1cf216566c1ee064": "Projektet är inte tillgängligt",
   "c1b8c351aa90f319": [
     {
       "t": "span",
@@ -10363,8 +10392,6 @@
     " alternativ"
   ],
   "5a15598cf35f21d5": "Dolt konto",
-  "9a45e39fc525861b": "Dölj {label}-konton",
-  "7a41204a0c474da6": "Visa {label}-konton",
   "08bef4c99734eb67": "Använd {label} på {host}",
   "ac84c037d4bef01d": "{label}-konto för {host}",
   "0013f3b084afe69b": "Konto {number}",
@@ -10404,7 +10431,6 @@
     },
     "-värd använder, eller stäng av en värd."
   ],
-  "9e8b725de0072098": "Inloggad som",
   "25d2d58cd2a8f103": [
     "Aktivt ",
     {
@@ -10653,7 +10679,6 @@
     },
     "."
   ],
-  "c3b322e041dd88da": "Skapa en token",
   "ded875ce84c22d60": "Token",
   "c31cd9e1037af9f9": "Commit-meddelanden och titlar och beskrivningar för pull requests följer varje projekts historik.",
   "f512a778a446d715": "Prefix enligt Conventional Commits, med korta titlar och beskrivningar för pull requests.",

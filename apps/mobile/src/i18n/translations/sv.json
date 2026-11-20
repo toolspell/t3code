@@ -46,7 +46,7 @@
   "1fcffc9b1a7d921c": "Installera Jujutsu med {command} eller från {url}.",
   "94168222df47e6a3": "Installera GitHubs kommandoradsverktyg ({cli}) via {url} eller din pakethanterare (till exempel {command}).",
   "6ff697b80a1714c7": "Installera GitLabs kommandoradsverktyg ({cli}) från {url} eller din pakethanterare (till exempel {command}).",
-  "929a11e234f6e5d9": "Installera Azures kommandoradsverktyg ({cli}) och aktivera sedan stöd för Azure DevOps med {command}.",
+  "cbc820f553b229b9": "Installera Azures kommandoradsverktyg ({cli}) eller konfigurera en PAT.",
   "ad599e9de33538dd": "Lägg till en Bitbucket-token i Inställningar → Versionshantering och ärenden.",
   "d810ecd91e8cf9d0": "Installera Origin CLI med {install} och kör sedan {login}.",
   "eb0f60ef4f92ab7d": "Installera {fj} 0.6 eller senare från {fjUrl} och kör {fjLogin}, eller installera {tea} 0.16 eller senare från {teaUrl} och kör {teaLogin} för varje Forgejo- eller Gitea-server.",

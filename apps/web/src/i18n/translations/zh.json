@@ -46,7 +46,7 @@
   "1fcffc9b1a7d921c": "请使用 {command} 或从 {url} 安装 Jujutsu。",
   "94168222df47e6a3": "请通过 {url} 或包管理器（例如 {command}）安装 GitHub 命令行工具（{cli}）。",
   "6ff697b80a1714c7": "请从 {url} 或包管理器（例如 {command}）安装 GitLab 命令行工具（{cli}）。",
-  "929a11e234f6e5d9": "请安装 Azure 命令行工具（{cli}），然后使用 {command} 启用 Azure DevOps 支持。",
+  "cbc820f553b229b9": "请安装 Azure 命令行工具（{cli}）或配置 PAT。",
   "ad599e9de33538dd": "请在“设置 → 版本控制与 issue”中添加 Bitbucket token。",
   "d810ecd91e8cf9d0": "请使用 {install} 安装 Origin CLI，然后运行 {login}。",
   "eb0f60ef4f92ab7d": "请从 {fjUrl} 安装 {fj} 0.6 或更高版本并运行 {fjLogin}，或从 {teaUrl} 安装 {tea} 0.16 或更高版本，并为每个 Forgejo 或 Gitea 服务器运行 {teaLogin}。",
@@ -5787,14 +5787,13 @@
   "b6a29fff7c7c0808": "无",
   "54420465784bb1bd": "加载较早的评论",
   "9d82ebf35bfb4043": "这里还没有任何动态。",
-  "1cf216566c1ee064": "不可用的项目",
   "b5ddadeb0810688c": "状态",
   "93c1fc19d9bf1db0": "参与方式",
   "d5a8b335d88b65bc": "已隐藏 {hidden} 个",
   "2160067266a61dd8": "任意",
   "cd4ec4acf33c65b9": "{count, plural, other {{count} 个标签}}",
   "bfd20acb8b7dee6b": "任何人",
-  "ad208e3e32c85029": "全部隐藏",
+  "aead644e2cf1233f": "全部显示",
   "77ce79d865716719": "没有匹配的项目。",
   "af7eb4f9c7f0f575": "筛选条件",
   "08247dd39b0c85ff": "受理人",
@@ -6475,7 +6474,6 @@
   "64d0189be492147c": "无法打开检查详情",
   "600347ca50400a54": "正在加载检查…",
   "1b381201aba745c2": "未报告任何检查",
-  "aead644e2cf1233f": "全部显示",
   "a6d75a4380173c60": "打开检查：{summary}",
   "be3d1766bad18693": "检查：{summary}",
   "425e4a3d6c5c2867": "{count, plural, other {{count} 个失败}}",
@@ -7504,6 +7502,36 @@
   "cbff27b770de81c2": "需要设置",
   "1c5879d287821457": "设为默认",
   "4082cde5252183e6": "访问地址",
+  "92a97de392f4dbd6": "{host} 个人访问 token",
+  "a507057ad1d438a4": "输入组织名称或 dev.azure.com URL。",
+  "427ca5e5aa908630": "保存将替换 {organization} 的 token。",
+  "5d790fc12a88859d": "未保存 token；服务器使用 Azure CLI 登录。",
+  "fcd2b0618b0b2292": "隐藏 Azure CLI 账户",
+  "d9858aa47831392e": "显示 Azure CLI 账户",
+  "929a11e234f6e5d9": "请安装 Azure 命令行工具（{cli}），然后使用 {command} 启用 Azure DevOps 支持。",
+  "9a45e39fc525861b": "隐藏 {label} 账户",
+  "7a41204a0c474da6": "显示 {label} 账户",
+  "a01d8d1098bfc65a": "为组织保存的个人访问 token 会优先于 Azure CLI 登录使用。每个组织都需要自己的 token。请授予它对代码和工作项的读写权限。",
+  "c3b322e041dd88da": "创建 token",
+  "995cef782c8ec15f": "组织 URL",
+  "1ead8d7792d7df93": "个人访问 token",
+  "111a44209dc6e701": "移除",
+  "1916a0d73520b63c": "Azure CLI",
+  "576677e88bf190d5": "用于上方未设置 token 的所有 Azure DevOps Services 组织。不支持本地部署的 Azure DevOps Server。",
+  "9e8b725de0072098": "已登录账户",
+  "0c1396abaa216c14": [
+    "未登录。请在服务器主机上运行",
+    " ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": "az login"
+    },
+    "。"
+  ],
+  "3e17377e88bc3c4f": "来自密钥提供方",
+  "26d51b395c688cc1": "token 被拒绝。请换成新的 token。",
+  "fd90d999fcf25d96": "无法检查该 token。",
   "42f8550e26e9ffd9": "均衡",
   "e91e30033a833aaf": "性能优先",
   "8c6a3ffe43dae6da": "省电",
@@ -9676,7 +9704,6 @@
   ],
   "13d4f258e93f1dc1": "连接一个环境，即可管理其提供方变量使用的凭据提供方。",
   "88466f5a03be2419": "这是环境级设置，请先选择一个环境再修改。",
-  "111a44209dc6e701": "移除",
   "a3538ba5ca802bd7": [
     "移除 ",
     {
@@ -9759,6 +9786,7 @@
   "51497bd401292062": "长按",
   "9d6cc6ac23312071": "连按两次",
   "f001fa7b329c8fbf": "隐藏成功的调用",
+  "ad208e3e32c85029": "全部隐藏",
   "c80e4bb3201efd71": "专注模式",
   "0cb9ffcd1fb46b0c": "仅状态",
   "cf0f7fc3df26fa75": "状态和消息",
@@ -9968,6 +9996,7 @@
   "573ea5fdf293a9d6": "所有工作副本",
   "470ad8c54049d1e1": "搜索工作副本",
   "7e2dfdd9f97fc027": "项目范围",
+  "1cf216566c1ee064": "不可用的项目",
   "c1b8c351aa90f319": [
     {
       "t": "span",
@@ -10374,8 +10403,6 @@
     " 个选项"
   ],
   "5a15598cf35f21d5": "已隐藏的账户",
-  "9a45e39fc525861b": "隐藏 {label} 账户",
-  "7a41204a0c474da6": "显示 {label} 账户",
   "08bef4c99734eb67": "在 {host} 上使用 {label}",
   "ac84c037d4bef01d": "{host} 的 {label} 账户",
   "0013f3b084afe69b": "账户 {number}",
@@ -10415,7 +10442,6 @@
     },
     " 主机使用，或关闭某个主机。"
   ],
-  "9e8b725de0072098": "已登录账户",
   "25d2d58cd2a8f103": [
     "当前 ",
     {
@@ -10666,7 +10692,6 @@
     },
     "。"
   ],
-  "c3b322e041dd88da": "创建 token",
   "ded875ce84c22d60": "token",
   "c31cd9e1037af9f9": "提交信息以及 pull request 的标题和说明沿用各项目的历史风格。",
   "f512a778a446d715": "使用约定式提交前缀，pull request 标题和说明保持简短。",

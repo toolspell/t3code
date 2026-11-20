@@ -1,9 +1,10 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { makeProviderSettingsSchema, SourceControlProviderKind } from "@t3tools/contracts";
 import { canonicalRepositoryPath } from "@t3tools/shared/git";
 import {
   buildCommitUrl,
   changeRequestUrlBelow,
   defineSourceControl,
+  hostCredentialSettingsFields,
   isChangeRequestAuthorityOfProject,
   parseChangeRequestPath,
   parseIssuePath,
@@ -85,6 +86,10 @@ function checkoutCommandId(args: string): string | null {
 }
 
 const KIND = SourceControlProviderKind.make("azure-devops");
+
+/** Personal access tokens keyed by organization URL; Azure no longer accepts one token for every organization. */
+export const settings = makeProviderSettingsSchema({ tokens: hostCredentialSettingsFields.tokens });
+export type AzureDevOpsSettings = typeof settings.Type;
 
 export const definition = defineSourceControl({
   kind: KIND,
@@ -206,4 +211,5 @@ export const definition = defineSourceControl({
     );
   },
   canReadChangeRequestOnHost: () => false,
+  settings,
 });

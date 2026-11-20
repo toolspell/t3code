@@ -46,7 +46,7 @@
   "1fcffc9b1a7d921c": "Install Jujutsu with {command} or from {url}.",
   "94168222df47e6a3": "Install the GitHub command-line tool ({cli}) via {url} or your package manager (for example {command}).",
   "6ff697b80a1714c7": "Install the GitLab command-line tool ({cli}) from {url} or your package manager (for example {command}).",
-  "929a11e234f6e5d9": "Install the Azure command-line tools ({cli}), then enable Azure DevOps support with {command}.",
+  "cbc820f553b229b9": "Install the Azure command-line tools ({cli}) or configure a PAT.",
   "ad599e9de33538dd": "Add a Bitbucket token in Settings → Source control & issues.",
   "d810ecd91e8cf9d0": "Install the Origin CLI with {install}, then run {login}.",
   "eb0f60ef4f92ab7d": "Install {fj} 0.6 or later from {fjUrl} and run {fjLogin}, or install {tea} 0.16 or later from {teaUrl} and run {teaLogin} for each Forgejo or Gitea server.",
@@ -5782,14 +5782,13 @@
   "b6a29fff7c7c0808": "None",
   "54420465784bb1bd": "Load older comments",
   "9d82ebf35bfb4043": "Nothing has happened here yet.",
-  "1cf216566c1ee064": "Unavailable project",
   "b5ddadeb0810688c": "State",
   "93c1fc19d9bf1db0": "Involvement",
   "d5a8b335d88b65bc": "{hidden} hidden",
   "2160067266a61dd8": "Any",
   "cd4ec4acf33c65b9": "{count, plural, one {{count} label} other {{count} labels}}",
   "bfd20acb8b7dee6b": "Anyone",
-  "ad208e3e32c85029": "Hide all",
+  "aead644e2cf1233f": "Show all",
   "77ce79d865716719": "No matching projects.",
   "af7eb4f9c7f0f575": "Filters",
   "08247dd39b0c85ff": "Assignee",
@@ -6470,7 +6469,6 @@
   "64d0189be492147c": "Unable to open check details",
   "600347ca50400a54": "Loading checks…",
   "1b381201aba745c2": "No checks reported",
-  "aead644e2cf1233f": "Show all",
   "a6d75a4380173c60": "Open checks: {summary}",
   "be3d1766bad18693": "Checks: {summary}",
   "425e4a3d6c5c2867": "{count, plural, one {{count} failed} other {{count} failed}}",
@@ -7496,6 +7494,36 @@
   "cbff27b770de81c2": "Setup required",
   "1c5879d287821457": "Set as default",
   "4082cde5252183e6": "Reachable at",
+  "92a97de392f4dbd6": "{host} personal access token",
+  "a507057ad1d438a4": "Enter an organization name or a dev.azure.com URL.",
+  "427ca5e5aa908630": "Saving replaces the token for {organization}.",
+  "5d790fc12a88859d": "No token saved; the server uses the Azure CLI login.",
+  "fcd2b0618b0b2292": "Hide Azure CLI account",
+  "d9858aa47831392e": "Reveal Azure CLI account",
+  "929a11e234f6e5d9": "Install the Azure command-line tools ({cli}), then enable Azure DevOps support with {command}.",
+  "9a45e39fc525861b": "Hide {label} accounts",
+  "7a41204a0c474da6": "Reveal {label} accounts",
+  "a01d8d1098bfc65a": "A personal access token saved for an organization is used before the Azure CLI login. Each organization needs its own token. Give it read and write access to Code and Work Items.",
+  "c3b322e041dd88da": "Create a token",
+  "995cef782c8ec15f": "Organization URL",
+  "1ead8d7792d7df93": "Personal access token",
+  "111a44209dc6e701": "Remove",
+  "1916a0d73520b63c": "Azure CLI",
+  "576677e88bf190d5": "Used for every organization at Azure DevOps Services without a token above. Not supported for on-prem Azure DevOps Server.",
+  "9e8b725de0072098": "Signed in as",
+  "0c1396abaa216c14": [
+    "Not signed in. Run",
+    " ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": "az login"
+    },
+    " on the server host."
+  ],
+  "3e17377e88bc3c4f": "From a secret provider",
+  "26d51b395c688cc1": "Token rejected. Replace it with a new token.",
+  "fd90d999fcf25d96": "Could not check the token.",
   "42f8550e26e9ffd9": "Balanced",
   "e91e30033a833aaf": "Performance",
   "8c6a3ffe43dae6da": "Battery saver",
@@ -9671,7 +9699,6 @@
   ],
   "13d4f258e93f1dc1": "Connect an environment to manage the secret providers its provider variables read from.",
   "88466f5a03be2419": "Environment-wide setting. Select an environment to change it.",
-  "111a44209dc6e701": "Remove",
   "a3538ba5ca802bd7": [
     "Remove ",
     {
@@ -9754,6 +9781,7 @@
   "51497bd401292062": "Hold",
   "9d6cc6ac23312071": "Double press",
   "f001fa7b329c8fbf": "Hide successful",
+  "ad208e3e32c85029": "Hide all",
   "c80e4bb3201efd71": "Zen",
   "0cb9ffcd1fb46b0c": "Status only",
   "cf0f7fc3df26fa75": "Status and messages",
@@ -9963,6 +9991,7 @@
   "573ea5fdf293a9d6": "All checkouts",
   "470ad8c54049d1e1": "Search checkouts",
   "7e2dfdd9f97fc027": "Project scope",
+  "1cf216566c1ee064": "Unavailable project",
   "c1b8c351aa90f319": [
     {
       "t": "span",
@@ -10365,8 +10394,6 @@
     " options"
   ],
   "5a15598cf35f21d5": "Hidden account",
-  "9a45e39fc525861b": "Hide {label} accounts",
-  "7a41204a0c474da6": "Reveal {label} accounts",
   "08bef4c99734eb67": "Use {label} on {host}",
   "ac84c037d4bef01d": "{label} account for {host}",
   "0013f3b084afe69b": "Account {number}",
@@ -10406,7 +10433,6 @@
     },
     " host uses, or turn a host off."
   ],
-  "9e8b725de0072098": "Signed in as",
   "25d2d58cd2a8f103": [
     "Active ",
     {
@@ -10655,7 +10681,6 @@
     },
     "."
   ],
-  "c3b322e041dd88da": "Create a token",
   "ded875ce84c22d60": "Token",
   "c31cd9e1037af9f9": "Commit messages and pull request titles and descriptions match each project's history.",
   "f512a778a446d715": "Conventional Commit prefixes, with short pull request titles and descriptions.",

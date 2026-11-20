@@ -46,7 +46,7 @@
   "1fcffc9b1a7d921c": "Installiere Jujutsu mit {command} oder von {url}.",
   "94168222df47e6a3": "Installiere das GitHub-Kommandozeilentool ({cli}) über {url} oder deinen Paketmanager (zum Beispiel {command}).",
   "6ff697b80a1714c7": "Installiere das GitLab-Kommandozeilentool ({cli}) über {url} oder deinen Paketmanager (zum Beispiel {command}).",
-  "929a11e234f6e5d9": "Installiere die Azure-Kommandozeilentools ({cli}) und aktiviere dann die Azure-DevOps-Unterstützung mit {command}.",
+  "cbc820f553b229b9": "Installiere die Azure-Kommandozeilentools ({cli}) oder konfiguriere ein PAT.",
   "ad599e9de33538dd": "Füge unter Einstellungen → Versionskontrolle & Issues ein Bitbucket-Token hinzu.",
   "d810ecd91e8cf9d0": "Installiere die Origin CLI mit {install} und führe dann {login} aus.",
   "eb0f60ef4f92ab7d": "Installiere {fj} 0.6 oder neuer von {fjUrl} und führe {fjLogin} aus, oder installiere {tea} 0.16 oder neuer von {teaUrl} und führe {teaLogin} für jeden Forgejo- oder Gitea-Server aus.",
