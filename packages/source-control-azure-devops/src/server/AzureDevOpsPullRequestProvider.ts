@@ -104,7 +104,9 @@ const CAPABILITIES: PullRequestCapabilities = {
 const UNAVAILABLE_REQUIREMENT = {
   missing:
     "Azure CLI (`az`) with the Azure DevOps extension is required. Install `az`, then run `az extension add --name azure-devops`.",
-  unauthenticated: "Azure CLI is not signed in. Run `az login` and retry.",
+  // One text for both routes: the server picks it by host kind, not by the route that failed.
+  unauthenticated:
+    "Azure DevOps refused the credentials. If a personal access token is saved for this organization, replace it in Settings → Source control & issues; otherwise run `az login` on the server host.",
 };
 
 /**
