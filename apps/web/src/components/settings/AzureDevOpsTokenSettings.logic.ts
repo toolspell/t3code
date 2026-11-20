@@ -1,30 +1,15 @@
+import { azureDevOpsOrganizationUrl } from "@t3tools/client-runtime/source-control-clients";
 import type { SourceControlProviderAuth } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 
-const ORGANIZATION_NAME = /^[a-z0-9][a-z0-9-]*$/iu;
-const LEGACY_HOST = /^([a-z0-9][a-z0-9-]*)\.visualstudio\.com$/u;
-
-/**
- * The organization URL a token is saved under, as `https://dev.azure.com/{organization}`. Accepts a
- * bare organization name, any page inside it, and the legacy `{organization}.visualstudio.com`.
- */
-export function normalizeAzureDevOpsOrganizationUrl(input: string): string | null {
-  const trimmed = input.trim();
-  if (ORGANIZATION_NAME.test(trimmed)) return `https://dev.azure.com/${trimmed.toLowerCase()}`;
-  let url: URL;
+/** A saved organization or collection URL as the list shows it: `host/path`, unescaped. */
+export function azureDevOpsOrganizationLabel(organizationUrl: string): string {
+  const label = organizationUrl.replace(/^https:\/\//u, "");
   try {
-    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`);
+    return decodeURIComponent(label);
   } catch {
-    return null;
+    return label;
   }
-  const host = url.hostname.toLowerCase();
-  const organization =
-    host === "dev.azure.com"
-      ? url.pathname.split("/").find((segment) => segment !== "")
-      : LEGACY_HOST.exec(host)?.[1];
-  return organization !== undefined && ORGANIZATION_NAME.test(organization)
-    ? `https://dev.azure.com/${organization.toLowerCase()}`
-    : null;
 }
 
 export function azureDevOpsNewTokenUrl(organizationUrl: string): string {
@@ -69,8 +54,9 @@ export function azureDevOpsTokenCheck(
   auth: SourceControlProviderAuth,
   organizationUrl: string,
 ): AzureDevOpsTokenCheck {
+  const key = azureDevOpsOrganizationUrl(organizationUrl);
   const entry = auth.accounts?.find(
-    (account) => account.host.toLowerCase() === organizationUrl.toLowerCase(),
+    (account) => key !== null && azureDevOpsOrganizationUrl(account.host) === key,
   );
   if (entry === undefined) return { status: "not-checked" };
   const separator = (entry.error ?? "").indexOf(":");

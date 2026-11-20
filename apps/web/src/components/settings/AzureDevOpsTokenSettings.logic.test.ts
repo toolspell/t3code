@@ -3,28 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   azureDevOpsTokenCheck,
-  normalizeAzureDevOpsOrganizationUrl,
   withAzureDevOpsTokenDetail,
 } from "./AzureDevOpsTokenSettings.logic";
-
-describe("normalizeAzureDevOpsOrganizationUrl", () => {
-  it.each([
-    ["Contoso", "https://dev.azure.com/contoso"],
-    ["https://dev.azure.com/Contoso", "https://dev.azure.com/contoso"],
-    ["dev.azure.com/contoso/", "https://dev.azure.com/contoso"],
-    ["https://dev.azure.com/contoso/ado-service-demo-1/_git/web", "https://dev.azure.com/contoso"],
-    ["https://contoso.visualstudio.com/DefaultCollection", "https://dev.azure.com/contoso"],
-  ])("%s", (input, expected) => {
-    expect(normalizeAzureDevOpsOrganizationUrl(input)).toBe(expected);
-  });
-
-  it.each(["", "  ", "https://dev.azure.com", "https://github.com/contoso", "not a url"])(
-    "rejects %j",
-    (input) => {
-      expect(normalizeAzureDevOpsOrganizationUrl(input)).toBeNull();
-    },
-  );
-});
 
 const ORGANIZATION = "https://dev.azure.com/contoso";
 const account = (fields: { readonly authenticated: boolean; readonly error?: string }) => ({

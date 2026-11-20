@@ -7,7 +7,7 @@ import {
 import * as Option from "effect/Option";
 import { describe, expect, it } from "vite-plus/test";
 
-import { definition } from "./definition.ts";
+import { azureDevOpsOrganizationUrl, definition } from "./definition.ts";
 
 const parse = (url: string) => definition.parseChangeRequestUrl(new URL(url));
 
@@ -84,6 +84,37 @@ describe("Azure DevOps change request URLs", () => {
     ).toBe("https://dev.azure.com/acme/project/_git/web/pullrequest/43");
   });
 
+  it("builds Azure DevOps Server links on the web origin, never the SSH port", () => {
+    const sha = "a".repeat(40);
+    const ssh = "ssh://ado.example:2222/tfs/Second%20Collection/Project/_git/Repo";
+    const https = "https://ado.example:8443/tfs/Second Collection/Project/_git/Repo";
+    const repository = "tfs/second%20collection/project/_git/repo";
+    const host = "ado.example";
+    expect(definition.changeRequestUrl({ host, repository, number: 7, remoteUrl: ssh })).toBe(
+      "https://ado.example/tfs/second%20collection/project/_git/repo/pullrequest/7",
+    );
+    expect(definition.commitUrl?.({ host, repository, sha, remoteUrl: ssh })).toBe(
+      `https://ado.example/tfs/second%20collection/project/_git/repo/commit/${sha}`,
+    );
+    expect(definition.changeRequestUrl({ host, repository, number: 7, remoteUrl: https })).toBe(
+      "https://ado.example:8443/tfs/second%20collection/project/_git/repo/pullrequest/7",
+    );
+  });
+
+  it("takes pasted Azure DevOps Server pull request URLs as references", () => {
+    for (const url of [
+      "https://dev.azure.com/acme/web/_git/app/pullrequest/7",
+      "https://acme.visualstudio.com/DefaultCollection/web/_git/app/pullrequest/7",
+      "https://ado.example:8443/tfs/Second%20Collection/web/_git/app/pullrequest/7?_a=files",
+      "http://ado.example/Coll/web/_git/app/pullrequest/7",
+    ]) {
+      expect(definition.isChangeRequestReference(url), url).toBe(true);
+    }
+    expect(definition.isChangeRequestReference("https://ado.example/_git/app/pullrequest/7")).toBe(
+      false,
+    );
+  });
+
   it.each([
     ["ssh.dev.azure.com/v3/org-a/project/web", "git@ssh.dev.azure.com:v3/org-a/project/web"],
     [
@@ -119,7 +150,86 @@ describe("Azure DevOps remotes", () => {
     ]) {
       expect(recognizeRemoteWith(definition, remote)?.kind, remote).toBe("azure-devops");
     }
-    expect(recognizeRemoteWith(definition, "https://azure.example/o/p/_git/r")).toBeNull();
+  });
+
+  it.each([
+    [
+      "https://ado.example/DefaultCollection/Project/_git/Repo",
+      "https://ado.example/defaultcollection",
+    ],
+    [
+      "https://ADO.example:8443/tfs/Coll/Project/_git/Repo.git",
+      "https://ado.example:8443/tfs/coll",
+    ],
+    [
+      "https://ado.example/Second%20Collection/Project/_git/Repo",
+      "https://ado.example/second%20collection",
+    ],
+    [
+      "https://ado.example/Second Collection/Project/_git/Repo",
+      "https://ado.example/second%20collection",
+    ],
+    ["http://ado.example:8080/Coll/Project/_git/Repo", "http://ado.example:8080/coll"],
+    // The SSH port is not the web's.
+    ["ssh://git@ado.example:2222/tfs/Coll/Project/_git/Repo", "https://ado.example/tfs/coll"],
+    [
+      "ssh://ado.example:2222/Second%20Collection/Project/_git/Repo",
+      "https://ado.example/second%20collection",
+    ],
+    ["git@ado.github.example:Coll/Project/_git/Repo", "https://ado.github.example/coll"],
+    ["https://ado.example/Coll/_git/Repo", "https://ado.example/coll"],
+  ])("recognises the Azure DevOps Server remote %s", (remote, baseUrl) => {
+    expect(recognizeRemoteWith(definition, remote)).toEqual({
+      kind: "azure-devops",
+      name: "Azure DevOps Server",
+      baseUrl,
+    });
+  });
+
+  it.each([
+    "https://github.com/acme/repo",
+    "https://gitea.example/acme/_git",
+    "https://ado.example/_git/Repo",
+    "https://ado.example/tfs/_git/Repo",
+    "https://ado.example/Coll/Project/_git/Repo/extra",
+    "https://ado.example/Coll/Project/Repo",
+  ])("leaves %s to other hosts", (remote) => {
+    expect(recognizeRemoteWith(definition, remote)).toBeNull();
+  });
+});
+
+describe("azureDevOpsOrganizationUrl", () => {
+  it.each([
+    ["Contoso", "https://dev.azure.com/contoso"],
+    ["https://dev.azure.com/Contoso", "https://dev.azure.com/contoso"],
+    ["dev.azure.com/contoso/", "https://dev.azure.com/contoso"],
+    ["https://dev.azure.com/contoso/ado-service-demo-1/_git/web", "https://dev.azure.com/contoso"],
+    ["https://contoso.visualstudio.com/DefaultCollection", "https://dev.azure.com/contoso"],
+    ["https://ado.example/DefaultCollection", "https://ado.example/defaultcollection"],
+    ["ado.example/Second Collection/Project/_git/Repo", "https://ado.example/second%20collection"],
+    ["https://ado.example/second%20collection/", "https://ado.example/second%20collection"],
+    ["https://user@ADO.example:8443/TFS/Coll/Project", "https://ado.example:8443/tfs/coll"],
+    ["https://ado.example:443/Coll", "https://ado.example/coll"],
+  ])("%s", (input, expected) => {
+    expect(azureDevOpsOrganizationUrl(input)).toBe(expected);
+  });
+
+  it.each([
+    "",
+    "  ",
+    "not a url",
+    "https://dev.azure.com",
+    "https://dev.azure.com/_apis",
+    "https://vssps.dev.azure.com/contoso",
+    "https://ado.example",
+    "https://ado.example/tfs",
+    "https://ado.example/_apis/connectionData",
+    // A token must never travel in the clear.
+    "http://ado.example/DefaultCollection",
+    "http://dev.azure.com/contoso",
+    "ssh://ado.example:2222/DefaultCollection",
+  ])("refuses %j", (input) => {
+    expect(azureDevOpsOrganizationUrl(input)).toBeNull();
   });
 });
 
@@ -189,6 +299,33 @@ describe("Azure DevOps repository keys", () => {
         "dev.azure.com/example/sample%20%28beta%29/_git/sample%20%28beta%29",
       ),
     ).toBe(canonicalKey);
+  });
+
+  it("gives an Azure DevOps Server repository one key over SSH and HTTPS", () => {
+    const keys = [
+      "ssh://ado.example:2222/tfs/Second%20Collection/Project/_git/Repo.git",
+      "https://ado.example:8443/tfs/Second Collection/Project/_git/Repo.git",
+      "https://ado.example/TFS/second%20collection/project/_git/repo.git",
+    ].map((remote) => registry.repositoryKeyFromRemote(remote));
+    expect(new Set(keys)).toEqual(
+      new Set(["ado.example/tfs/second%20collection/project/_git/repo.git"]),
+    );
+    const identity: ChangeRequestProjectIdentity = {
+      canonicalKey: keys[0]!,
+      locator: {
+        source: "git-remote",
+        remoteName: "origin",
+        remoteUrl: "ssh://ado.example:2222/x",
+      },
+    };
+    const link = parse(
+      "https://ado.example:8443/tfs/Second%20Collection/Project/_git/Repo.git/pullrequest/3",
+    )!;
+    expect(definition.isChangeRequestInRepository(identity, link)).toBe(true);
+    expect(
+      definition.isChangeRequestInRepository(identity, { ...link, host: "other.example" }),
+    ).toBe(false);
+    expect(registry.findByRepositoryKey(keys[0]!)).toBeUndefined();
   });
 
   it("still drops .git from other hosts' repository keys", () => {
@@ -297,6 +434,41 @@ describe("Azure DevOps issue scope", () => {
     expect(
       definition.parseIssueUrl?.(new URL("https://dev.azure.com/acme/_workitems/edit/9")),
     ).toBeNull();
+  });
+
+  it("places Azure DevOps Server work items in the collection's project", () => {
+    const kind = SourceControlProviderKind.make("azure-devops");
+    const scopeOn = (displayName: string) =>
+      definition.issueScope?.({
+        provider: kind,
+        canonicalKey: `ado.example/${displayName.toLowerCase()}`,
+        displayName,
+      });
+    expect(scopeOn("Second%20Collection/Web%20App/_git/web")).toBe("Second Collection/Web App");
+    expect(scopeOn("tfs/Coll/Web/_git/web")).toBe("tfs/Coll/Web");
+    expect(scopeOn("tfs/Coll/_git/Web")).toBe("tfs/Coll/Web");
+    expect(scopeOn("Coll/_git/Web")).toBe("Coll/Web");
+    expect(scopeOn("tfs/_git/Web")).toBeNull();
+    // On dev.azure.com, `tfs` is an organization like any other.
+    expect(
+      definition.issueScope?.({
+        provider: kind,
+        canonicalKey: "dev.azure.com/tfs/web/_git/web",
+        displayName: "tfs/Web/_git/web",
+      }),
+    ).toBe("tfs/Web");
+    const issue = (url: string) => definition.parseIssueUrl?.(new URL(url));
+    expect(issue("https://ado.example:8443/tfs/Coll/Web%20App/_workitems/edit/9")).toEqual({
+      host: "ado.example",
+      scope: "tfs/coll/web app",
+      key: "9",
+    });
+    expect(issue("https://ado.example/Second%20Collection/Web/_workitems/edit/9")).toEqual({
+      host: "ado.example",
+      scope: "second collection/web",
+      key: "9",
+    });
+    expect(issue("https://ado.example/tfs/Coll/_workitems/edit/9")).toBeNull();
   });
 });
 

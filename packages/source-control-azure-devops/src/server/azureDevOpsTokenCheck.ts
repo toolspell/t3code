@@ -75,8 +75,13 @@ function supportsRequiredVersion(version: string): boolean {
 
 function organizationName(organizationUrl: string): string {
   const url = URL.parse(organizationUrl);
-  const segments = url?.pathname.split("/").filter(Boolean) ?? [];
-  return segments.at(-1) ?? url?.hostname ?? organizationUrl;
+  const last = url?.pathname.split("/").findLast(Boolean);
+  if (last === undefined) return url?.hostname ?? organizationUrl;
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
 }
 
 /** Whether a failed probe means the token lacks the scope, as opposed to any other trouble. */

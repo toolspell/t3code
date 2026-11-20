@@ -14,7 +14,7 @@ import { checkoutRemoteUrl, scopeFromRemoteUrl } from "./azureDevOpsRemote.ts";
 export type AzureDevOpsRoute =
   | {
       readonly _tag: "Rest";
-      /** `https://dev.azure.com/{org}`, lower-case, as tokens are saved. */
+      /** The organization or collection URL, as `azureDevOpsOrganizationUrl` keys tokens. */
       readonly organizationUrl: string;
       readonly token: Redacted.Redacted<string>;
       readonly project: string;
@@ -62,8 +62,8 @@ export class AzureDevOpsRouting extends Context.Service<
       readonly remoteUrl?: string | undefined;
     }) => Effect.Effect<AzureDevOpsRoute, AzureDevOpsTokenUnavailableError>;
     /**
-     * The route for an organization URL such as `https://dev.azure.com/{org}` or
-     * `https://{org}.visualstudio.com`; any other host keeps the Azure CLI.
+     * The route for an organization or collection URL such as `https://dev.azure.com/{org}`,
+     * `https://{org}.visualstudio.com` or `https://{server}/{collection}`.
      */
     readonly resolveOrganization: (
       organizationUrl: string,
@@ -73,20 +73,21 @@ export class AzureDevOpsRouting extends Context.Service<
 
 const CLI: AzureDevOpsRoute = { _tag: "Cli" };
 
-const tokenKey = (organizationUrl: string) =>
-  organizationUrl.trim().replace(/\/+$/u, "").toLowerCase();
-
-/** `https://dev.azure.com/{org}` for an organization URL in either form, or null for another host. */
-function organizationTokenKey(organizationUrl: string): string | null {
-  const url = URL.parse(organizationUrl.trim());
-  if (url === null) return null;
-  const host = url.hostname.toLowerCase();
-  const legacy = /^([^.]+)\.visualstudio\.com$/u.exec(host);
-  if (legacy !== null) return tokenKey(`https://dev.azure.com/${legacy[1]}`);
-  const [organization] = url.pathname.split("/").filter((part) => part.length > 0);
-  return host === "dev.azure.com" && organization !== undefined
-    ? tokenKey(`https://dev.azure.com/${organization}`)
-    : null;
+/**
+ * The saved key for a remote's organization or collection. An SSH or http remote does not name
+ * the https port, so it takes the one key saved for its host and collection path, at any port.
+ */
+function savedKeyForRemote(
+  saved: ReadonlyMap<string, unknown>,
+  scope: NonNullable<ReturnType<typeof scopeFromRemoteUrl>>,
+): string | undefined {
+  if (saved.has(scope.organizationUrl) || scope.webPortKnown) return scope.organizationUrl;
+  const wanted = new URL(scope.organizationUrl);
+  const matches = [...saved.keys()].filter((key) => {
+    const url = new URL(key);
+    return url.hostname === wanted.hostname && url.pathname === wanted.pathname;
+  });
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 /** @public */
@@ -103,21 +104,24 @@ export const make = Effect.gen(function* () {
       settings.value.sourceControlHosts[AzureDevOpsClient.definition.kind],
     );
     const saved = new Map(
-      Object.entries(tokens).flatMap(([organizationUrl, value]) =>
-        (typeof value === "string" ? value.trim() === "" : value === undefined)
+      Object.entries(tokens).flatMap(([organizationUrl, value]) => {
+        // A key that is no https organization or collection URL never gets a request.
+        const key = AzureDevOpsClient.azureDevOpsOrganizationUrl(organizationUrl);
+        return key === null ||
+          (typeof value === "string" ? value.trim() === "" : value === undefined)
           ? []
-          : [[tokenKey(organizationUrl), value] as const],
-      ),
+          : [[key, value] as const];
+      }),
     );
     return saved.size === 0 ? null : { saved, secretProviders: settings.value.secretProviders };
   });
 
   const restRoute = (
     tokens: NonNullable<Effect.Success<typeof savedTokens>>,
-    organizationUrl: string,
+    organizationUrl: string | null | undefined,
   ) => {
-    const value = tokens.saved.get(organizationUrl);
-    return value === undefined
+    const value = organizationUrl == null ? undefined : tokens.saved.get(organizationUrl);
+    return organizationUrl == null || value === undefined
       ? Effect.succeed(null)
       : requireSettingsSecretLiteral(value, tokens.secretProviders).pipe(
           Effect.map((token) => ({
@@ -141,10 +145,7 @@ export const make = Effect.gen(function* () {
       const scope = remoteUrl === null ? null : scopeFromRemoteUrl(remoteUrl);
       if (scope === null) return CLI;
       // Legacy `{org}.visualstudio.com` remotes share the organization's dev.azure.com token.
-      const route = yield* restRoute(
-        tokens,
-        tokenKey(`https://dev.azure.com/${encodeURIComponent(scope.organizationName)}`),
-      );
+      const route = yield* restRoute(tokens, savedKeyForRemote(tokens.saved, scope));
       return route === null
         ? CLI
         : ({
@@ -159,9 +160,11 @@ export const make = Effect.gen(function* () {
     "AzureDevOpsRouting.resolveOrganization",
   )(function* (organizationUrl) {
     const tokens = yield* savedTokens;
-    const key = tokens === null ? null : organizationTokenKey(organizationUrl);
-    if (tokens === null || key === null) return CLI;
-    return (yield* restRoute(tokens, key)) ?? CLI;
+    if (tokens === null) return CLI;
+    return (
+      (yield* restRoute(tokens, AzureDevOpsClient.azureDevOpsOrganizationUrl(organizationUrl))) ??
+      CLI
+    );
   });
 
   return AzureDevOpsRouting.of({ resolve, resolveOrganization });

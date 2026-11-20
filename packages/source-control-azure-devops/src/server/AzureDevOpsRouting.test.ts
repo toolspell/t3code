@@ -67,6 +67,67 @@ it.effect(
   },
 );
 
+it.effect("matches an Azure DevOps Server remote to its collection's https token", () => {
+  const { layer } = harness();
+  return Effect.gen(function* () {
+    yield* tokens({
+      tokens: {
+        "https://ado.example/Second%20Collection": "second-pat",
+        "https://ado.example:8443/tfs/coll": "tfs-pat",
+        "http://ado.example/defaultcollection": "clear-text-pat",
+      },
+    });
+    for (const [remoteUrl, organizationUrl, token] of [
+      [
+        "https://ado.example/Second Collection/Web%20Site/_git/app",
+        "https://ado.example/second%20collection",
+        "second-pat",
+      ],
+      [
+        "ssh://ado.example:2222/second%20collection/Web%20Site/_git/app",
+        "https://ado.example/second%20collection",
+        "second-pat",
+      ],
+      // The SSH port says nothing of the web's, so the one key for host and collection wins.
+      [
+        "ssh://ado.example:2222/TFS/Coll/Web%20Site/_git/app",
+        "https://ado.example:8443/tfs/coll",
+        "tfs-pat",
+      ],
+      [
+        "http://ado.example:8080/tfs/coll/Web%20Site/_git/app",
+        "https://ado.example:8443/tfs/coll",
+        "tfs-pat",
+      ],
+    ] as const) {
+      const route = yield* resolve({ cwd: "/repo", remoteUrl });
+      assert.strictEqual(route._tag, "Rest", remoteUrl);
+      if (route._tag !== "Rest") continue;
+      assert.strictEqual(route.organizationUrl, organizationUrl, remoteUrl);
+      assert.strictEqual(Redacted.value(route.token), token, remoteUrl);
+      assert.strictEqual(route.project, "Web Site", remoteUrl);
+      assert.strictEqual(route.repository, "app", remoteUrl);
+    }
+    for (const remoteUrl of [
+      // An https remote names its port, and none is saved for the default one.
+      "https://ado.example/tfs/coll/web/_git/app",
+      // A token saved for an http URL is never sent.
+      "ssh://ado.example:2222/DefaultCollection/web/_git/app",
+      "https://ado.example/DefaultCollection/web/_git/app",
+    ]) {
+      assert.deepStrictEqual(yield* resolve({ cwd: "/repo", remoteUrl }), { _tag: "Cli" });
+    }
+    const organization = (url: string) =>
+      AzureDevOpsRouting.AzureDevOpsRouting.use((routing) => routing.resolveOrganization(url));
+    const route = yield* organization("https://ADO.example/Second Collection/Web Site");
+    assert.strictEqual(route._tag, "Rest");
+    if (route._tag === "Rest") assert.strictEqual(Redacted.value(route.token), "second-pat");
+    assert.deepStrictEqual(yield* organization("http://ado.example/defaultcollection"), {
+      _tag: "Cli",
+    });
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect("reads the checkout's primary remote when T3 selected none", () => {
   const { run, layer } = harness(
     "upstream\thttps://dev.azure.com/fabrikam/web/_git/app (fetch)\n" +

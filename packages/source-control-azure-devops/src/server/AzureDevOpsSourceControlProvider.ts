@@ -80,9 +80,14 @@ export const makeDiscovery = Effect.gen(function* () {
       AzureDevOpsClient.settings,
       current.value.sourceControlHosts[AzureDevOpsClient.definition.kind],
     );
-    const saved = Object.entries(tokens).filter(([, value]) =>
-      typeof value === "string" ? value.trim() !== "" : value !== undefined,
-    );
+    // Checked at the URL the router sends the token to; an http or unreadable key gets no check.
+    const saved = Object.entries(tokens).flatMap(([key, value]) => {
+      const organizationUrl = AzureDevOpsClient.azureDevOpsOrganizationUrl(key);
+      return organizationUrl === null ||
+        (typeof value === "string" ? value.trim() === "" : value === undefined)
+        ? []
+        : [[organizationUrl, value] as const];
+    });
     return yield* Effect.forEach(
       saved,
       ([organizationUrl, value]) =>

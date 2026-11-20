@@ -8,6 +8,7 @@ import {
 import type { ServerSettings, SourceControlAppAccessInput } from "@t3tools/contracts";
 import { parseGitRemoteRepository } from "@t3tools/shared/git";
 
+export { azureDevOpsOrganizationUrl } from "@t3tools/source-control-definitions/registry";
 export {
   isMonochromeSourceControlIcon,
   UNKNOWN_SOURCE_CONTROL_CLIENT,

@@ -1,5 +1,5 @@
 import { makeProviderSettingsSchema, SourceControlProviderKind } from "@t3tools/contracts";
-import { canonicalRepositoryPath } from "@t3tools/shared/git";
+import { canonicalRepositoryPath, parseGitRemoteRepository } from "@t3tools/shared/git";
 import {
   buildCommitUrl,
   changeRequestUrlBelow,
@@ -18,11 +18,15 @@ const CHANGE_REQUEST_PATH = /^\/((?:[^/]+\/)*_git\/[^/]+)\/pullrequest\/(\d+)(?:
 const COMMIT_PATH = /^\/((?:[^/]+\/)*_git\/[^/]+)\/commit\/([0-9a-f]+)\/?$/iu;
 // Work items belong to the project: /{organization}/{project}/_workitems/edit/{id}.
 const WORK_ITEM_PATH = /^\/([^/]+\/[^/]+)\/_workitems\/edit\/(\d+)(?:\/|$)/u;
+// Below the `tfs` virtual directory of an Azure DevOps Server: /tfs/{collection}/{project}/...
+const TFS_WORK_ITEM_PATH = /^\/(tfs\/[^/]+\/[^/]+)\/_workitems\/edit\/(\d+)(?:\/|$)/iu;
 // A legacy organization is its hostname: https://{organization}.visualstudio.com/{project}/...
 const LEGACY_WORK_ITEM_PATH = /^\/([^/]+)\/_workitems\/edit\/(\d+)(?:\/|$)/u;
 const CHECKOUT_COMMAND = /^az\s+repos\s+pr\s+checkout\s+(.+)$/i;
 const CHANGE_REQUEST_REFERENCE =
-  /^https:\/\/(?:dev\.azure\.com\/[^/\s]+\/[^/\s]+|[^/\s]+\.visualstudio\.com\/(?:DefaultCollection\/)?[^/\s]+)\/_git\/[^/\s]+\/pullrequest\/(\d+)(?:[/?#].*)?$/i;
+  /^https?:\/\/[^/\s]+\/(?:[^/\s]+\/)+_git\/[^/\s]+\/pullrequest\/(\d+)(?:[/?#].*)?$/i;
+const ORGANIZATION_NAME = /^[a-z0-9][a-z0-9-]*$/iu;
+const LEGACY_HOST = /^([a-z0-9][a-z0-9-]*)\.visualstudio\.com$/u;
 
 // `ssh.dev.azure.com` is the default SSH clone host (git@ssh.dev.azure.com:v3/org/project/repo),
 // so any `*.dev.azure.com` subdomain is Azure. Legacy hosts stay under `.visualstudio.com`,
@@ -36,6 +40,53 @@ function isAzureHostname(hostname: string): boolean {
 }
 
 /**
+ * How many leading segments of an Azure DevOps Server path name the collection: one, or two below
+ * the `tfs` virtual directory older installs keep.
+ */
+function collectionLength(segments: ReadonlyArray<string>): number {
+  return segments[0]?.toLowerCase() === "tfs" ? 2 : 1;
+}
+
+/** Whether a remote's lower-case `host/path` key is a repository on an Azure DevOps Server. */
+function isServerRepositoryKey(key: string): boolean {
+  const segments = key.split("/").slice(1);
+  const at = segments.indexOf("_git");
+  return at >= collectionLength(segments) && at === segments.length - 2;
+}
+
+/**
+ * The key a token is saved under: `https://dev.azure.com/{organization}`, or for a server
+ * `https://{host}[:port]/[tfs/]{collection}`, lower case with each segment escaped once. Takes an
+ * organization name or any page below either. Null otherwise, and for `http:`, sent in the clear.
+ */
+export function azureDevOpsOrganizationUrl(input: string): string | null {
+  const trimmed = input.trim();
+  if (ORGANIZATION_NAME.test(trimmed)) return `https://dev.azure.com/${trimmed.toLowerCase()}`;
+  let url: URL;
+  try {
+    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || url.hostname === "") return null;
+  const hostname = url.hostname.toLowerCase();
+  const segments = url.pathname.split("/").filter((segment) => segment !== "");
+  if (isAzureHostname(hostname)) {
+    const organization =
+      hostname === "dev.azure.com" ? segments[0] : LEGACY_HOST.exec(hostname)?.[1];
+    return organization !== undefined && ORGANIZATION_NAME.test(organization)
+      ? `https://dev.azure.com/${organization.toLowerCase()}`
+      : null;
+  }
+  const collection = segments.slice(0, collectionLength(segments));
+  // `_apis`, `_signin` and the like are routes, never a collection.
+  if (collection.length < collectionLength(segments) || collection.at(-1)!.startsWith("_")) {
+    return null;
+  }
+  return `https://${url.host.toLowerCase()}/${canonicalRepositoryPath(collection.join("/"))}`;
+}
+
+/**
  * Azure alone addresses one repository under two names that share no part: `ssh.dev.azure.com` and
  * `v3/{org}/{project}/{repo}` over SSH, against `dev.azure.com` and `{org}/{project}/_git/{repo}`
  * everywhere a person sees it. A project cloned over SSH would otherwise be a different repository
@@ -46,7 +97,7 @@ function repositoryKeyFromRemote(key: string): string | null {
     /^(ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com)\/v3\/([^/]+)\/([^/]+)\/([^/]+)$/u.exec(key);
   if (match === null) {
     // Azure takes a name as written, so its keys keep the `.git` other hosts drop.
-    return isAzureHostname(key.split("/", 1)[0]!) ? key : null;
+    return isAzureHostname(key.split("/", 1)[0]!) || isServerRepositoryKey(key) ? key : null;
   }
   const [, host, organization, project, repository] = match;
   return host === "ssh.dev.azure.com"
@@ -137,10 +188,13 @@ export const definition = defineSourceControl({
   },
   // A project named with spaces arrives percent-encoded; the binding it is matched against is not.
   parseIssueUrl: (url) => {
-    const legacy = url.hostname.toLowerCase().endsWith(".visualstudio.com");
+    const hostname = url.hostname.toLowerCase();
+    const legacy = hostname.endsWith(".visualstudio.com");
     const link =
-      parseIssuePath(url, WORK_ITEM_PATH) ??
-      (legacy ? parseIssuePath(url, LEGACY_WORK_ITEM_PATH) : null);
+      !isAzureHostname(hostname) && /^\/tfs\//iu.test(url.pathname)
+        ? parseIssuePath(url, TFS_WORK_ITEM_PATH)
+        : (parseIssuePath(url, WORK_ITEM_PATH) ??
+          (legacy ? parseIssuePath(url, LEGACY_WORK_ITEM_PATH) : null));
     if (link === null) return null;
     const scope = link.scope.split("/").map(decodeUrlPathSegment).join("/").toLowerCase();
     if (!legacy) return { ...link, scope };
@@ -173,10 +227,21 @@ export const definition = defineSourceControl({
   },
   isChangeRequestReference: (url) => CHANGE_REQUEST_REFERENCE.test(url),
   checkoutChangeRequestHost: () => null,
-  recognizeRemote: ({ host, hostname }) =>
-    isAzureHostname(hostname)
-      ? { kind: KIND, name: "Azure DevOps", baseUrl: `https://${host}` }
-      : null,
+  recognizeRemote: ({ remoteUrl, host, hostname }) => {
+    if (isAzureHostname(hostname)) {
+      return { kind: KIND, name: "Azure DevOps", baseUrl: `https://${host}` };
+    }
+    const path = parseGitRemoteRepository(remoteUrl, { keepGitSuffix: true })?.path;
+    if (path === undefined || !isServerRepositoryKey(`${hostname}/${path}`)) return null;
+    const segments = path.split("/");
+    const collection = segments.slice(0, collectionLength(segments)).join("/");
+    // An SSH remote's port is the SSH server's; the web is on the host's default https port.
+    return {
+      kind: KIND,
+      name: "Azure DevOps Server",
+      baseUrl: `${remoteWebOrigin(host, remoteUrl)}/${collection}`,
+    };
+  },
   /**
    * `az repos pr list --repository` takes a name; organisation and project come from checkout.
    * Decode the remote URL's name segment: `az` treats escapes literally and returns 404.
@@ -195,10 +260,16 @@ export const definition = defineSourceControl({
       .filter((part) => part !== "")
       .map(decodeUrlPathSegment);
     const at = segments.indexOf("_git");
-    if (at === 2) return segments.slice(0, at).join("/");
     const repository = segments[at + 1];
-    if ((at !== 0 && at !== 1) || repository === undefined) return null;
     const host = identity.canonicalKey?.split("/", 1)[0]?.toLowerCase() ?? "";
+    // On Azure DevOps Server the project follows the collection, which may sit below `tfs`.
+    if (host !== "" && !isAzureHostname(host) && repository !== undefined) {
+      const collection = collectionLength(segments);
+      if (at === collection + 1) return segments.slice(0, at).join("/");
+      return at === collection ? [...segments.slice(0, at), repository].join("/") : null;
+    }
+    if (at === 2) return segments.slice(0, at).join("/");
+    if ((at !== 0 && at !== 1) || repository === undefined) return null;
     const legacy = host.endsWith(".visualstudio.com");
     const [first = ""] = segments;
     if (at === 0) return legacy ? repository : null;

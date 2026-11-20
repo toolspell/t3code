@@ -12,6 +12,7 @@ import { useState } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import {
+  azureDevOpsOrganizationUrl,
   readHostCredentialSettings,
   type SourceControlDefinition,
 } from "@t3tools/client-runtime/source-control-clients";
@@ -22,9 +23,9 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import {
   azureDevOpsNewTokenUrl,
+  azureDevOpsOrganizationLabel,
   AZURE_DEVOPS_SCOPE_NAMES,
   azureDevOpsTokenCheck,
-  normalizeAzureDevOpsOrganizationUrl,
   savedAzureDevOpsOrganizations,
   type AzureDevOpsTokenCheck,
 } from "./AzureDevOpsTokenSettings.logic";
@@ -63,7 +64,7 @@ export function AzureDevOpsTokenSettings({
   const [saving, setSaving] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const cliAccount = auth.status === "authenticated" ? Option.getOrNull(auth.account) : null;
-  const organizationUrl = normalizeAzureDevOpsOrganizationUrl(organization);
+  const organizationUrl = azureDevOpsOrganizationUrl(organization);
   const savedOrganizations = savedAzureDevOpsOrganizations(tokens);
   const isSaved = organizationUrl !== null && savedOrganizations.includes(organizationUrl);
   const savedToken = isSaved ? tokens[organizationUrl] : undefined;
@@ -161,10 +162,11 @@ export function AzureDevOpsTokenSettings({
             </span>
             <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">
               <T>
-                A token saved for an organization is used instead of the Azure CLI login. Each
-                organization needs its own token. Give it Code (Read &amp; write), Work Items (Read
-                &amp; write), Identity (Read), and Project and Team (Read). Publishing a new
-                repository also needs Code (Read, write, &amp; manage).
+                A token saved for an organization is used instead of the Azure CLI login. Azure
+                DevOps Server collections always need one. Each organization or collection needs its
+                own token. Give it Code (Read &amp; write), Work Items (Read &amp; write), Identity
+                (Read), and Project and Team (Read). Publishing a new repository also needs Code
+                (Read, write, &amp; manage).
               </T>{" "}
               {organizationUrl !== null ? (
                 <InlineButton
@@ -185,7 +187,7 @@ export function AzureDevOpsTokenSettings({
           <div className="grid gap-3 sm:grid-cols-[minmax(12rem,20rem)_1fr]">
             <div className="grid gap-1.5">
               <Label htmlFor={`${definition.kind}-organization-${environmentId}`}>
-                <T>Organization URL</T>
+                <T>Organization or collection URL</T>
               </Label>
               <Input
                 id={`${definition.kind}-organization-${environmentId}`}
@@ -217,10 +219,14 @@ export function AzureDevOpsTokenSettings({
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs text-muted-foreground">
               {organization.trim() !== "" && organizationUrl === null
-                ? gt("Enter an organization name or a dev.azure.com URL.")
+                ? /^http:\/\//iu.test(organization.trim())
+                  ? gt("Tokens are only sent over HTTPS. Enter an https:// URL.")
+                  : gt(
+                      "Enter an organization name, a dev.azure.com URL, or an Azure DevOps Server collection URL.",
+                    )
                 : isSaved
                   ? gt("Saving replaces the token for {organization}.", {
-                      organization: organizationUrl.replace(/^https:\/\//u, ""),
+                      organization: azureDevOpsOrganizationLabel(organizationUrl),
                     })
                   : savedOrganizations.length === 0 && cliAccount !== null
                     ? gt("No token saved; the server uses the Azure CLI login.")
@@ -243,7 +249,7 @@ export function AzureDevOpsTokenSettings({
             <li key={saved} className="flex items-center justify-between gap-3 py-1">
               <div className="min-w-0">
                 <p className="truncate font-mono text-2xs text-foreground">
-                  {saved.replace(/^https:\/\//u, "")}
+                  {azureDevOpsOrganizationLabel(saved)}
                 </p>
                 <PatCheckLine
                   check={azureDevOpsTokenCheck(auth, saved)}
@@ -258,7 +264,7 @@ export function AzureDevOpsTokenSettings({
                   variant="outline"
                   disabled={saving}
                   onClick={() => {
-                    setOrganization(saved.replace(/^https:\/\//u, ""));
+                    setOrganization(azureDevOpsOrganizationLabel(saved));
                     document.getElementById(tokenInputId)?.focus();
                   }}
                 >
