@@ -11,7 +11,12 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/http";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientRequest,
+  type HttpClientResponse,
+} from "effect/http";
 
 const DEFAULT_API_VERSION = "7.1";
 // Azure DevOps holds an over-budget request for up to 30 seconds before answering it.
@@ -47,7 +52,10 @@ export class AzureDevOpsRestError extends Schema.TaggedError<AzureDevOpsRestErro
     operation: Schema.String,
     reason: AzureDevOpsRestErrorReason,
     status: Schema.optional(Schema.Number),
-    /** Azure's own `message`, such as a `TF401019` explanation. Never contains the token. */
+    /**
+     * Azure's own `message`, such as a `TF401019` explanation, or where a refused redirect
+     * pointed. Never contains the token.
+     */
     serverMessage: Schema.optional(Schema.String),
     retryAt: Schema.optional(Schema.Number),
     cause: Schema.optional(Schema.Defect()),
@@ -131,14 +139,49 @@ function organizationKey(organizationUrl: string): string {
   return trimSlashes(organizationUrl).toLowerCase();
 }
 
-/** The full request URL; `base` is the organization URL or an area's host. */
-function requestUrl(base: string, input: AzureDevOpsRestRequest): string {
-  const url = new URL(`${trimSlashes(base)}/${input.path.replace(/^\/+/u, "")}`);
+/**
+ * The full request URL; `base` is the organization URL or an accepted area host. Undefined when
+ * the path would leave `base`, such as through a `..` segment, since the token belongs to it.
+ */
+function requestUrl(base: string, input: AzureDevOpsRestRequest): string | undefined {
+  const root = new URL(`${trimSlashes(base)}/`);
+  const url = new URL(`${root.href}${input.path.replace(/^\/+/u, "")}`);
+  if (url.origin !== root.origin || !url.pathname.startsWith(root.pathname)) return undefined;
   for (const [name, value] of Object.entries(input.query ?? {})) {
     if (value !== undefined) url.searchParams.set(name, String(value));
   }
   url.searchParams.set("api-version", input.apiVersion ?? DEFAULT_API_VERSION);
   return url.toString();
+}
+
+const parseUrl = (value: string, base?: string): URL | undefined => {
+  try {
+    return new URL(value, base);
+  } catch {
+    return undefined;
+  }
+};
+
+/** Over https on the default port, at `domain` itself or, with `subdomains`, below it. */
+const onDomain = (url: URL, domain: string, subdomains: boolean) =>
+  url.protocol === "https:" &&
+  url.port === "" &&
+  (url.hostname === domain || (subdomains && url.hostname.endsWith(`.${domain}`)));
+
+/**
+ * The token may follow an area to its host only on the organization's own origin, or, for Azure
+ * DevOps Services, on Microsoft's hosts. Anything else falls back to the organization URL.
+ */
+function acceptsAreaLocation(organization: URL, location: URL): boolean {
+  if (location.username !== "" || location.password !== "") return false;
+  if (location.origin === organization.origin) return true;
+  const services =
+    onDomain(organization, "dev.azure.com", false) ||
+    onDomain(organization, "visualstudio.com", true);
+  return (
+    services &&
+    (onDomain(location, "dev.azure.com", true) || onDomain(location, "visualstudio.com", true))
+  );
 }
 
 /** Null for a usable answer. `body` only matters for failures. */
@@ -206,7 +249,20 @@ export const make = Effect.gen(function* () {
       rateLimitKey,
       interactive || method !== "GET" ? { allowPaused: true } : undefined,
     );
+    const failure = (fields: {
+      readonly reason: AzureDevOpsRestErrorReason;
+      readonly status?: number;
+      readonly serverMessage?: string | undefined;
+      readonly retryAt?: number | undefined;
+      readonly cause?: unknown;
+    }) => new AzureDevOpsRestError({ operation: input.operation, ...fields });
     const url = requestUrl(base, input);
+    if (url === undefined) {
+      return yield* failure({
+        reason: "request",
+        serverMessage: "The request path leaves the organization URL.",
+      });
+    }
     // The query can carry branch names and file paths.
     yield* Effect.annotateCurrentSpan({
       "http.request.method": method,
@@ -219,13 +275,6 @@ export const make = Effect.gen(function* () {
         "x-tfs-fedauthredirect": "Suppress",
       }),
     );
-    const failure = (fields: {
-      readonly reason: AzureDevOpsRestErrorReason;
-      readonly status?: number;
-      readonly serverMessage?: string | undefined;
-      readonly retryAt?: number | undefined;
-      readonly cause?: unknown;
-    }) => new AzureDevOpsRestError({ operation: input.operation, ...fields });
     const bodyText =
       input.body === undefined
         ? undefined
@@ -244,6 +293,8 @@ export const make = Effect.gen(function* () {
     const response: HttpClientResponse.HttpClientResponse = yield* httpClient.execute(request).pipe(
       // Client spans would expose the query through url.full.
       Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+      // Fetch would carry the token along a same-origin hop to another collection or organization.
+      Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
       Effect.timeout(REQUEST_TIMEOUT),
       Effect.mapError((cause) => failure({ reason: "request", cause })),
     );
@@ -258,6 +309,14 @@ export const make = Effect.gen(function* () {
       Effect.timeout(REQUEST_TIMEOUT),
       Effect.mapError((cause) => failure({ reason: "request", status: response.status, cause })),
     );
+    if (response.status >= 300 && response.status < 400) {
+      const location = parseUrl(response.headers.location ?? "", url);
+      return yield* failure({
+        reason: "response",
+        status: response.status,
+        serverMessage: `Redirected to ${location?.origin ?? "another address"}; requests with a personal access token do not follow redirects.`,
+      });
+    }
     const now = yield* Clock.currentTimeMillis;
     const retryAt = SourceControlRateLimit.retryAtFromHeader(response.headers["retry-after"], now);
     const body = textOf(collected.bytes);
@@ -307,13 +366,17 @@ export const make = Effect.gen(function* () {
       path: "_apis/resourceAreas",
       apiVersion: RESOURCE_AREAS_API_VERSION,
     });
+    const organizationRoot = new URL(organization);
     const hosts: ReadonlyMap<string, string> = new Map(
       Option.match(decodeResourceAreas(textOf(answer.bytes)), {
         onNone: () => [],
         onSome: (decoded) =>
-          decoded.value.map(
-            (entry) => [entry.name.toLowerCase(), trimSlashes(entry.locationUrl)] as const,
-          ),
+          decoded.value.flatMap((entry) => {
+            const location = parseUrl(entry.locationUrl);
+            return location !== undefined && acceptsAreaLocation(organizationRoot, location)
+              ? [[entry.name.toLowerCase(), trimSlashes(location.href)] as const]
+              : [];
+          }),
       }),
     );
     yield* Ref.update(areaHosts, (current) => new Map(current).set(key, hosts));

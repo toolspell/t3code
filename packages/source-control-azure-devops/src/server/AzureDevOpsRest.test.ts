@@ -4,7 +4,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/http";
+import {
+  FetchHttpClient,
+  HttpClient,
+  type HttpClientRequest,
+  HttpClientResponse,
+} from "effect/http";
 
 import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
 
@@ -24,6 +29,28 @@ function harness(respond: (request: HttpClientRequest.HttpClientRequest) => Resp
         }),
       ),
     ),
+  );
+  return { requests, layer };
+}
+
+/** The server's fetch client over a fake fetch that follows redirects unless told not to. */
+function fetchHarness(respond: (url: string) => Response) {
+  const requests: Array<{ readonly url: string; readonly authorization: string | null }> = [];
+  const fakeFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    let url = String(input);
+    for (;;) {
+      const headers = new Headers(init?.headers);
+      requests.push({ url, authorization: headers.get("authorization") });
+      const response = respond(url);
+      const location = response.headers.get("location");
+      if (init?.redirect === "manual" || location === null) return response;
+      url = new URL(location, url).href;
+    }
+  };
+  const layer = AzureDevOpsRest.layer.pipe(
+    Layer.provide(SourceControlRateLimit.layer),
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fakeFetch as typeof globalThis.fetch)),
   );
   return { requests, layer };
 }
@@ -49,6 +76,38 @@ it.effect("sends the token, suppresses the sign-in redirect, and escapes query v
       `Basic ${Buffer.from(":secret-pat").toString("base64")}`,
     );
     assert.strictEqual(request!.headers["x-tfs-fedauthredirect"], "Suppress");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("never follows a redirect, so the token stays with the organization", () =>
+  Effect.gen(function* () {
+    for (const location of [
+      "https://elsewhere.example/landing",
+      "https://dev.azure.com/other-organization/_apis/projects",
+    ]) {
+      const { requests, layer } = fetchHarness((url) =>
+        url.startsWith(ORGANIZATION)
+          ? new Response(null, { status: 302, headers: { location } })
+          : Response.json({ value: [] }),
+      );
+      const error = yield* Effect.flip(read("_apis/projects").pipe(Effect.provide(layer)));
+      assert.deepStrictEqual(
+        requests.map((request) => new URL(request.url).origin + new URL(request.url).pathname),
+        [`${ORGANIZATION}/_apis/projects`],
+      );
+      assert.strictEqual(error._tag === "AzureDevOpsRestError" && error.reason, "response");
+      assert.include(error.message, new URL(location).origin);
+      assert.notInclude(error.message, "secret-pat");
+    }
+  }),
+);
+
+it.effect("refuses a path that climbs out of the organization", () => {
+  const { requests, layer } = harness(() => Response.json({ value: [] }));
+  return Effect.gen(function* () {
+    const error = yield* Effect.flip(read("../other-organization/_apis/projects"));
+    assert.strictEqual(error._tag === "AzureDevOpsRestError" && error.reason, "request");
+    assert.strictEqual(requests.length, 0);
   }).pipe(Effect.provide(layer));
 });
 
@@ -167,6 +226,49 @@ it.effect(
       );
     }).pipe(Effect.provide(layer));
   },
+);
+
+it.effect("sends the token only to an area host on the organization's origin or Microsoft's", () =>
+  Effect.gen(function* () {
+    const cases: ReadonlyArray<readonly [organization: string, location: string, used: string]> = [
+      [ORGANIZATION, "https://elsewhere.example/contoso/", ORGANIZATION],
+      [ORGANIZATION, "http://vssps.dev.azure.com/contoso/", ORGANIZATION],
+      [ORGANIZATION, "https://vssps.dev.azure.com.elsewhere.example/", ORGANIZATION],
+      [ORGANIZATION, "https://vssps.dev.azure.com:8443/contoso/", ORGANIZATION],
+      [
+        "https://contoso.visualstudio.com",
+        "https://contoso.vssps.visualstudio.com/",
+        "https://contoso.vssps.visualstudio.com",
+      ],
+      [
+        "https://ado.example/tfs/DefaultCollection",
+        "https://vssps.dev.azure.com/contoso/",
+        "https://ado.example/tfs/DefaultCollection",
+      ],
+      [
+        "https://ado.example/tfs/DefaultCollection",
+        "https://ado.example:8443/tfs/DefaultCollection/",
+        "https://ado.example/tfs/DefaultCollection",
+      ],
+      [
+        "https://ado.example/tfs/DefaultCollection",
+        "https://ado.example/tfs/Identity/",
+        "https://ado.example/tfs/Identity",
+      ],
+    ];
+    for (const [organization, location, used] of cases) {
+      const { requests, layer } = harness((request) =>
+        new URL(request.url).pathname.endsWith("/_apis/resourceAreas")
+          ? Response.json({ value: [{ name: "ims", locationUrl: location }] })
+          : Response.json({ value: [] }),
+      );
+      yield* read("_apis/identities", { organizationUrl: organization, area: "ims" }).pipe(
+        Effect.provide(layer),
+      );
+      const url = new URL(requests[1]!.url);
+      assert.strictEqual(url.origin + url.pathname, `${used}/_apis/identities`, location);
+    }
+  }),
 );
 
 it.effect("decodes JSON answers and reports a body that does not match", () => {
