@@ -338,20 +338,22 @@ function PatCheckLine({
       <span>
         {check.status === "rejected"
           ? gt("Token rejected. Replace it with a new token.")
-          : check.status === "missing-scopes"
-            ? gt("Missing scopes: {scopes}. Replace the token with one that has them.", {
-                scopes: scopeNames(check.scopes),
-              })
-            : check.status === "unsupported-version"
-              ? gt(
-                  "This server offers REST API {version}; T3 Code needs 7.1 (Azure DevOps Server 2022.1 or newer).",
-                  { version: check.version },
-                )
-              : check.status === "secret-unresolved"
-                ? gt("Could not read the token from its secret provider.")
-                : check.status === "not-checked"
-                  ? gt("Not checked yet.")
-                  : gt("Could not check the token.")}
+          : check.status === "organization-not-found"
+            ? gt("Organization not found. Check the organization URL.")
+            : check.status === "missing-scopes"
+              ? gt("Missing scopes: {scopes}. Replace the token with one that has them.", {
+                  scopes: scopeNames(check.scopes),
+                })
+              : check.status === "unsupported-version"
+                ? gt(
+                    "This server offers REST API {version}; T3 Code needs 7.1 (Azure DevOps Server 2022.1 or newer).",
+                    { version: check.version },
+                  )
+                : check.status === "secret-unresolved"
+                  ? gt("Could not read the token from its secret provider.")
+                  : check.status === "not-checked"
+                    ? gt("Not checked yet.")
+                    : gt("Could not check the token.")}
       </span>
       {source}
     </p>

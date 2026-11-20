@@ -7498,6 +7498,7 @@
   "7a41204a0c474da6": "Mostrar cuentas de {label}",
   "004c12f0e6694dec": "Faltan ámbitos: {scopes}. Las funciones que los necesitan no funcionarán.",
   "d957c2cd00ebe9ca": "Token rechazado. Sustitúyelo por un token nuevo.",
+  "3a8353a3e907a4f2": "No se encontró la organización. Comprueba la URL de la organización.",
   "7da165c79205b00a": "Faltan ámbitos: {scopes}. Sustituye el token por uno que los tenga.",
   "26a2f90f203d6623": "Este servidor ofrece la API REST {version}; T3 Code necesita la 7.1 (Azure DevOps Server 2022.1 o posterior).",
   "dc079fdebad3c70e": "No se pudo leer el token de su proveedor de secretos.",

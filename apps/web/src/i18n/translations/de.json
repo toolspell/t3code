@@ -7497,6 +7497,7 @@
   "7a41204a0c474da6": "{label}-Konten einblenden",
   "004c12f0e6694dec": "Fehlende Berechtigungen: {scopes}. Funktionen, die sie brauchen, funktionieren nicht.",
   "d957c2cd00ebe9ca": "Token abgelehnt. Ersetze es durch ein neues Token.",
+  "3a8353a3e907a4f2": "Organisation nicht gefunden. Prüfe die Organisations-URL.",
   "7da165c79205b00a": "Fehlende Berechtigungen: {scopes}. Ersetze das Token durch eines, das sie hat.",
   "26a2f90f203d6623": "Dieser Server bietet REST-API {version}; T3 Code braucht 7.1 (Azure DevOps Server 2022.1 oder neuer).",
   "dc079fdebad3c70e": "Das Token konnte nicht aus seinem Secret-Anbieter gelesen werden.",

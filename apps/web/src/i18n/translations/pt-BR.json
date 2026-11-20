@@ -7498,6 +7498,7 @@
   "7a41204a0c474da6": "Mostrar contas do {label}",
   "004c12f0e6694dec": "Escopos ausentes: {scopes}. Os recursos que precisam deles não funcionarão.",
   "d957c2cd00ebe9ca": "Token rejeitado. Substitua-o por um novo token.",
+  "3a8353a3e907a4f2": "Organização não encontrada. Verifique a URL da organização.",
   "7da165c79205b00a": "Escopos ausentes: {scopes}. Substitua o token por um que os tenha.",
   "26a2f90f203d6623": "Este servidor oferece a API REST {version}; o T3 Code precisa da 7.1 (Azure DevOps Server 2022.1 ou mais recente).",
   "dc079fdebad3c70e": "Não foi possível ler o token do provedor de segredos.",

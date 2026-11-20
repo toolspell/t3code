@@ -38,6 +38,7 @@ const SCOPE_PROBES = [
  */
 const TOKEN_ERROR = {
   rejected: "rejected",
+  organizationNotFound: "organization-not-found",
   unreachable: "unreachable",
   secretUnresolved: "secret-unresolved",
   unsupportedVersion: (version: string) => `unsupported-version:${version}`,
@@ -125,7 +126,12 @@ export const checkOrganizationToken = Effect.fn("AzureDevOpsTokenCheck.organizat
     if (viewer._tag === "Failure") {
       return entry({
         authenticated: false,
-        error: isScopeDenial(viewer.failure) ? TOKEN_ERROR.rejected : TOKEN_ERROR.unreachable,
+        error: isScopeDenial(viewer.failure)
+          ? TOKEN_ERROR.rejected
+          : // Azure answers an organization that does not exist with 404, whatever the token.
+            viewer.failure._tag === "AzureDevOpsRestError" && viewer.failure.reason === "not-found"
+            ? TOKEN_ERROR.organizationNotFound
+            : TOKEN_ERROR.unreachable,
       });
     }
     const user = viewer.success.authenticatedUser;

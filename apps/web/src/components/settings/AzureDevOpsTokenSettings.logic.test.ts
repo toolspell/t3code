@@ -65,6 +65,10 @@ describe("azureDevOpsTokenCheck", () => {
     ],
     [account({ authenticated: false, error: "rejected" }), { status: "rejected" }],
     [
+      account({ authenticated: false, error: "organization-not-found" }),
+      { status: "organization-not-found" },
+    ],
+    [
       account({ authenticated: false, error: "secret-unresolved" }),
       { status: "secret-unresolved" },
     ],

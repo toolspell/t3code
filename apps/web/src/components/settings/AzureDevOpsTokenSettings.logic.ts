@@ -55,7 +55,14 @@ export type AzureDevOpsTokenCheck =
     }
   | { readonly status: "missing-scopes"; readonly scopes: ReadonlyArray<string> }
   | { readonly status: "unsupported-version"; readonly version: string }
-  | { readonly status: "rejected" | "secret-unresolved" | "unreachable" | "not-checked" };
+  | {
+      readonly status:
+        | "rejected"
+        | "organization-not-found"
+        | "secret-unresolved"
+        | "unreachable"
+        | "not-checked";
+    };
 
 /** The server's check of one organization's token, from the discovery item's accounts. */
 export function azureDevOpsTokenCheck(
@@ -75,7 +82,9 @@ export function azureDevOpsTokenCheck(
   }
   if (code === "missing-scopes") return { status: "missing-scopes", scopes };
   if (code === "unsupported-version") return { status: "unsupported-version", version: value };
-  if (code === "rejected" || code === "secret-unresolved") return { status: code };
+  if (code === "rejected" || code === "organization-not-found" || code === "secret-unresolved") {
+    return { status: code };
+  }
   return { status: "unreachable" };
 }
 

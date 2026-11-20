@@ -94,6 +94,14 @@ it.effect("tells a rejected token, an old server and missing scopes apart", () =
       [true, "missing-scopes:work-items,identity"],
     );
 
+    const unknownOrganization = yield* check(
+      () => new Response("The resource cannot be found.", { status: 404 }),
+    );
+    assert.deepStrictEqual(
+      [unknownOrganization.authenticated, unknownOrganization.error],
+      [false, "organization-not-found"],
+    );
+
     const down = yield* check(() => new Response("upstream", { status: 503 }));
     assert.deepStrictEqual([down.authenticated, down.error], [false, "unreachable"]);
   }),
