@@ -11,18 +11,18 @@ import * as Layer from "effect/Layer";
 import { ChildProcessSpawner } from "effect/process";
 import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/http";
 
-import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
-import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
+import * as AzureDevOpsApi from "./AzureDevOpsApi.ts";
+import * as AzureDevOpsPullRequestApi from "./AzureDevOpsPullRequestApi.ts";
 import * as AzureDevOpsPullRequestProvider from "./AzureDevOpsPullRequestProvider.ts";
 import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
 import * as AzureDevOpsRouting from "./AzureDevOpsRouting.ts";
 
-const mockedExecute = vi.fn<AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]>();
+const mockedExecute = vi.fn<AzureDevOpsApi.AzureDevOpsApi["Service"]["execute"]>();
 
 const layer = it.layer(
-  AzureDevOpsPullRequestCli.layer.pipe(
+  AzureDevOpsPullRequestApi.layer.pipe(
     Layer.provide(
-      Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
+      Layer.mock(AzureDevOpsApi.AzureDevOpsApi)({
         execute: mockedExecute,
       }),
     ),
@@ -172,11 +172,11 @@ function changeEntries(count: number): ReadonlyArray<Record<string, unknown>> {
  */
 function routed(respond: (request: HttpClientRequest.HttpClientRequest) => Response) {
   const requests: Array<HttpClientRequest.HttpClientRequest> = [];
-  const execute = vi.fn<AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]>(() =>
+  const execute = vi.fn<AzureDevOpsApi.AzureDevOpsApi["Service"]["execute"]>(() =>
     Effect.die("An organization with a saved token must not reach az."),
   );
-  const layer = AzureDevOpsPullRequestCli.layer.pipe(
-    Layer.provide(Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({ execute })),
+  const layer = AzureDevOpsPullRequestApi.layer.pipe(
+    Layer.provide(Layer.mock(AzureDevOpsApi.AzureDevOpsApi)({ execute })),
     Layer.provide(AzureDevOpsRouting.layer),
     Layer.provide(
       AzureDevOpsRest.layer.pipe(
@@ -236,7 +236,7 @@ it.effect("names the viewer from connectionData when the organization has a save
   );
   return Effect.gen(function* () {
     yield* saveToken(true);
-    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+    const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
     assert.strictEqual(yield* cli.getViewer({ cwd: "/w" }), "bilal@acme.dev");
     const url = urlOf(requests[0]);
@@ -255,7 +255,7 @@ const restPullRequest = "/contoso/Web%20Site/_apis/git/repositories/web%20app/pu
 it.effect.each([
   {
     read: "a pull request",
-    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+    call: (cli: AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi["Service"]) =>
       cli.getPullRequest({ cwd: "/w", number: 42 }),
     body: { ...pullRequestRow, labels: [{ name: "release-1.0" }] },
     path: "/contoso/_apis/git/pullrequests/42",
@@ -263,7 +263,7 @@ it.effect.each([
   },
   {
     read: "review threads",
-    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+    call: (cli: AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi["Service"]) =>
       cli.listThreads({ cwd: "/w", location: restLocation, number: 42 }),
     body: {
       value: [
@@ -286,7 +286,7 @@ it.effect.each([
   },
   {
     read: "labels",
-    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+    call: (cli: AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi["Service"]) =>
       cli.listLabels({ cwd: "/w", location: restLocation, number: 42 }),
     body: { count: 1, value: [{ id: "4f1c", name: "release-1.0" }] },
     path: `${restPullRequest}/labels`,
@@ -294,7 +294,7 @@ it.effect.each([
   },
   {
     read: "iterations",
-    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+    call: (cli: AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi["Service"]) =>
       cli.listIterations({ cwd: "/w", location: restLocation, number: 42 }),
     body: oneIteration,
     path: `${restPullRequest}/iterations`,
@@ -302,7 +302,7 @@ it.effect.each([
   },
   {
     read: "an iteration's changes",
-    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+    call: (cli: AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi["Service"]) =>
       cli.listIterationChanges({ cwd: "/w", location: restLocation, number: 42, iterationId: 2 }),
     body: { changeEntries: changeEntries(2) },
     path: `${restPullRequest}/iterations/2/changes`,
@@ -310,7 +310,7 @@ it.effect.each([
   },
   {
     read: "a file",
-    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+    call: (cli: AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi["Service"]) =>
       cli.readItemContent({
         cwd: "/w",
         location: restLocation,
@@ -331,7 +331,7 @@ it.effect.each([
 ])("reads $read over REST as az reads it", ({ call, body, path, query }) => {
   const { requests, execute, layer, saveToken } = routed(() => Response.json(body));
   return Effect.gen(function* () {
-    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+    const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
     execute.mockReturnValue(Effect.succeed(output(JSON.stringify(body))));
     const viaCli = yield* call(cli);
     execute.mockClear();
@@ -377,7 +377,7 @@ it.effect.each([
       return Response.json({ count: rows.length, value: rows });
     });
     return Effect.gen(function* () {
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
       const list = cli.listPullRequests({
         cwd: "/w",
         repository: "web app",
@@ -428,7 +428,7 @@ it.effect("fails a REST listing by an author no identity matches, as az does", (
   );
   return Effect.gen(function* () {
     yield* saveToken(true);
-    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+    const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
     const error = yield* Effect.flip(
       cli.listPullRequests({
         cwd: "/w",
@@ -468,7 +468,7 @@ it.effect("reads policy evaluations over REST under the project id the pull requ
     return Response.json({ count: page.length, value: page });
   });
   return Effect.gen(function* () {
-    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+    const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
     const read = cli.listPolicyChecks({ cwd: "/w", number: 42, isDraft: false });
     execute
       .mockReturnValueOnce(Effect.succeed(output(JSON.stringify(pages[0]))))
@@ -504,7 +504,7 @@ it.effect("posts the blob ids over REST and reads the zip as az's archive is rea
   const { requests, execute, layer, saveToken } = routed(() => new Response(new Uint8Array(zip)));
   return Effect.gen(function* () {
     yield* saveToken(true);
-    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+    const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
     const blobs = yield* cli.readBlobs({
       cwd: "/w",
@@ -571,13 +571,13 @@ const restWritePath = "/contoso/project-id/_apis/git/repositories/repo-id/pullRe
 it.effect.each([
   {
     write: "a title and description",
-    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+    call: (cli: AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi["Service"]) =>
       cli.updatePullRequest({ cwd: "/w", number: 42, title: "@title", body: "- body" }),
     body: { title: "@title", description: "- body" },
   },
   {
     write: "a title alone",
-    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+    call: (cli: AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi["Service"]) =>
       cli.updatePullRequest({ cwd: "/w", number: 42, title: "Renamed" }),
     body: { title: "Renamed" },
   },
@@ -619,7 +619,7 @@ it.effect.each([
     ] as const
   ).map(([action, mergeMethod, body]) => ({
     write: `${action}${mergeMethod === undefined ? "" : ` by ${mergeMethod}`}`,
-    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+    call: (cli: AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi["Service"]) =>
       cli.runPullRequestAction({
         cwd: "/w",
         number: 42,
@@ -632,7 +632,7 @@ it.effect.each([
   const { requests, execute, layer, saveToken } = writable();
   return Effect.gen(function* () {
     yield* saveToken(true);
-    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+    const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
     yield* call(cli);
 
@@ -650,7 +650,7 @@ it.effect("returns the pull request an action left, as az prints it", () => {
   );
   return Effect.gen(function* () {
     yield* saveToken(true);
-    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+    const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
     const left = yield* cli.runPullRequestAction({ cwd: "/w", number: 42, action: "draft" });
     assert.strictEqual(left?.isDraft, true);
   }).pipe(Effect.provide(layer));
@@ -702,7 +702,7 @@ it.effect.each([
     const { requests, execute, layer, saveToken } = writable(directory);
     return Effect.gen(function* () {
       yield* saveToken(true);
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
       yield* cli.setPullRequestReviewers({ cwd: "/w", number: 42, reviewers, requested });
 
@@ -735,7 +735,7 @@ it.effect("keeps a required reviewer required when adding them again over REST",
   const { requests, layer, saveToken } = writable(directory);
   return Effect.gen(function* () {
     yield* saveToken(true);
-    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+    const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
     yield* cli.setPullRequestReviewers({
       cwd: "/w",
@@ -766,7 +766,7 @@ it.effect.each([
   const { requests, layer, saveToken } = writable(directory);
   return Effect.gen(function* () {
     yield* saveToken(true);
-    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+    const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
     const error = yield* Effect.flip(
       cli.setPullRequestReviewers({
@@ -790,7 +790,7 @@ afterEach(() => {
   mockedExecute.mockReset();
 });
 
-layer("AzureDevOpsPullRequestCli.layer", (it) => {
+layer("AzureDevOpsPullRequestApi.layer", (it) => {
   it.effect("reports the latest pushed source commit even while the trial merge is stale", () =>
     Effect.gen(function* () {
       const previousHead = "a".repeat(40);
@@ -850,7 +850,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       mockedExecute.mockImplementationOnce((input) =>
         Effect.succeed(outputWithin(input.maxOutputBytes, response)),
       );
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
       const batch = yield* cli.listPullRequests({
         cwd: "/w",
@@ -869,7 +869,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
   it.effect("steps over what it has already handed over, which is all Azure can be told", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequests(3, 1))));
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
       yield* cli.listPullRequests({
         cwd: "/w",
@@ -891,7 +891,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
   it.effect("asks Azure for the author's pull requests by creator", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequests(1, 1))));
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
       yield* cli.listPullRequests({
         cwd: "/w",
@@ -924,7 +924,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
           ),
         )
         .mockReturnValueOnce(Effect.succeed(output(pullRequests(2, 2))));
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
       const batch = yield* cli.listPullRequests({
         cwd: "/w",
@@ -949,7 +949,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(output(JSON.stringify({ name: "bilal@acme.dev", type: "user" }))),
       );
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
       const viewer = yield* cli.getViewer({ cwd: "/w" });
 
@@ -968,7 +968,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
 
   it.effect("names a token sign-in by the viewer's own pull request", () =>
     Effect.gen(function* () {
-      const notLoggedIn = new AzureDevOpsCli.AzureDevOpsCliAuthenticationError({
+      const notLoggedIn = new AzureDevOpsApi.AzureDevOpsCliAuthenticationError({
         operation: "execute",
         command: "az",
         cwd: "/w",
@@ -986,7 +986,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
         )
         .mockReturnValueOnce(Effect.succeed(output("")))
         .mockReturnValueOnce(Effect.succeed(output("[]")));
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
       assert.strictEqual(yield* cli.getViewer({ cwd: "/w" }), "bilal@acme.dev");
       expect(argsOfCall(1)).toEqual(expect.arrayContaining(["--creator", "me", "--top", "1"]));
@@ -997,7 +997,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
 
   it.effect("fails when no sign-in can read pull requests", () =>
     Effect.gen(function* () {
-      const signedOut = new AzureDevOpsCli.AzureDevOpsCliAuthenticationError({
+      const signedOut = new AzureDevOpsApi.AzureDevOpsCliAuthenticationError({
         operation: "execute",
         command: "az",
         cwd: "/w",
@@ -1005,7 +1005,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
         cause: new Error("signed out"),
       });
       mockedExecute.mockReturnValue(Effect.fail(signedOut));
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
       const error = yield* Effect.flip(cli.getViewer({ cwd: "/w" }));
 
@@ -1031,7 +1031,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
         .mockReturnValueOnce(
           Effect.succeed(output(JSON.stringify([policyRow("Tests", "rejected")]))),
         );
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
       const checks = yield* cli.listPolicyChecks({ cwd: "/w", number: 42, isDraft: false });
       assert.deepStrictEqual(argsOfCall(1).slice(0, 12), [
         "repos",
@@ -1058,7 +1058,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
   ])("fails rather than report a $name policy page as complete", ({ result }) =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(result));
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
       const error = yield* Effect.flip(
         cli.listPolicyChecks({ cwd: "/w", number: 42, isDraft: false }),
       );
@@ -1069,7 +1069,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
   it.effect("sends a description that starts with a dash as one value, not as a flag", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
       yield* cli.updatePullRequest({
         cwd: "/w",
@@ -1086,7 +1086,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
     () =>
       Effect.gen(function* () {
         mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
-        const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+        const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
         yield* cli.updatePullRequest({
           cwd: "/w",
@@ -1376,7 +1376,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
         )
         .mockReturnValueOnce(
           Effect.fail(
-            new AzureDevOpsCli.AzureDevOpsCommandFailedError({
+            new AzureDevOpsApi.AzureDevOpsCommandFailedError({
               operation: "execute",
               command: "az",
               cwd: "/w",
@@ -1419,7 +1419,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
         )
         .mockReturnValueOnce(
           Effect.fail(
-            new AzureDevOpsCli.AzureDevOpsCliRateLimitError({
+            new AzureDevOpsApi.AzureDevOpsCliRateLimitError({
               operation: "execute",
               command: "az",
               cwd: "/w",
@@ -1583,7 +1583,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       mockedExecute.mockImplementationOnce((input) =>
         Effect.succeed(outputWithin(input.maxOutputBytes, response)),
       );
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
       const page = yield* cli.listIterationChanges({
         cwd: "/w",
@@ -1606,7 +1606,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       mockedExecute.mockImplementationOnce((input) =>
         Effect.succeed(outputWithin(input.maxOutputBytes, response)),
       );
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
       const item = yield* cli.readItemContent({
         cwd: "/w",
@@ -1647,7 +1647,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
             return output("");
           }),
         );
-        const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+        const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
         const blobs = yield* cli.readBlobs({
           cwd: "/w",
@@ -1682,7 +1682,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
           return output("");
         }),
       );
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
       const blobs = yield* cli.readBlobs({
         cwd: "/w",
@@ -1697,7 +1697,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
   it.effect("escapes characters in a file path that would cut the query string", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(json({ content: "x" }))));
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
       yield* cli.readItemContent({
         cwd: "/w",
@@ -1725,7 +1725,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
           ),
         ),
       );
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
       const error = yield* Effect.flip(cli.getPullRequest({ cwd: "/w", number: 42 }));
 
@@ -1735,7 +1735,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
 
   it.effect("refuses a reviewer az would read as a flag, before running anything", () =>
     Effect.gen(function* () {
-      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      const cli = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.setPullRequestReviewers({

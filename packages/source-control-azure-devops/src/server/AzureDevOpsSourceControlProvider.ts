@@ -8,7 +8,7 @@ import { SourceControlProviderError, type ChangeRequest } from "@t3tools/contrac
 import * as AzureDevOpsChangeRequestTemplate from "./azureDevOpsChangeRequestTemplate.ts";
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import * as AzureDevOpsClient from "../shared/definition.ts";
-import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
+import * as AzureDevOpsApi from "./AzureDevOpsApi.ts";
 import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
 import {
   checkOrganizationToken,
@@ -159,7 +159,7 @@ function toChangeRequest(summary: NormalizedAzureDevOpsPullRequestRecord): Chang
 }
 
 export const make = Effect.gen(function* () {
-  const azure = yield* AzureDevOpsCli.AzureDevOpsCli;
+  const azure = yield* AzureDevOpsApi.AzureDevOpsApi;
   const { git } = yield* SourceControlHost.SourceControlHost;
 
   return SourceControlProvider.SourceControlProvider.of({

@@ -236,6 +236,17 @@ function toAutoMergeMethod(
   }
 }
 
+/**
+ * A timestamp as `az repos pr` prints it (Python `isoformat`): Azure's fraction cut to 6 digits,
+ * dropped when zero, and `Z` as `+00:00`. REST states Azure's text, so both routes read alike.
+ */
+export function azureCliTimestamp(value: string): string {
+  const match = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)$/u.exec(value);
+  if (match === null) return value;
+  const fraction = (match[2] ?? "").slice(0, 6).padEnd(6, "0");
+  return `${match[1]}${/^0+$/u.test(fraction) ? "" : `.${fraction}`}${match[3] === "Z" ? "+00:00" : match[3]}`;
+}
+
 function toPullRequest(
   raw: Schema.Schema.Type<typeof RawPullRequestSchema>,
 ): AzureDevOpsPullRequest | null {
@@ -244,7 +255,9 @@ function toPullRequest(
     const actor = toActor(reviewer);
     return actor === null ? [] : [actor];
   });
-  const closedAt = trimmed(raw.closedDate);
+  const closedDate = trimmed(raw.closedDate);
+  const closedAt = closedDate === null ? null : azureCliTimestamp(closedDate);
+  const createdAt = azureCliTimestamp(raw.creationDate);
   const url = trimmed(
     azureDevOpsPullRequestWebUrl({
       pullRequestId: raw.pullRequestId,
@@ -268,8 +281,8 @@ function toPullRequest(
     state: toState(raw),
     isDraft: raw.isDraft ?? false,
     mergeability: toMergeability(raw.mergeStatus),
-    createdAt: raw.creationDate,
-    updatedAt: closedAt ?? raw.creationDate,
+    createdAt,
+    updatedAt: closedAt ?? createdAt,
     closedAt,
     body: raw.description ?? "",
     reviewRequestLogins: reviewers.map((reviewer) => reviewer.login),

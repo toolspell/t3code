@@ -9,7 +9,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { ChildProcessSpawner } from "effect/process";
 
-import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
+import * as AzureDevOpsApi from "./AzureDevOpsApi.ts";
 import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
 import * as AzureDevOpsRouting from "./AzureDevOpsRouting.ts";
 import * as AzureDevOpsSourceControlProvider from "./AzureDevOpsSourceControlProvider.ts";
@@ -91,7 +91,7 @@ it.effect("names the remote's repository when reading the default branch", () =>
     }
   }).pipe(
     Effect.provide(
-      AzureDevOpsCli.layer.pipe(
+      AzureDevOpsApi.layer.pipe(
         Layer.provide(AzureDevOpsRouting.layer),
         Layer.provide(Layer.mock(AzureDevOpsRest.AzureDevOpsRest)({})),
         Layer.provideMerge(support),
@@ -115,7 +115,7 @@ it.effect(
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({}),
+          Layer.mock(AzureDevOpsApi.AzureDevOpsApi)({}),
           TestSourceControlHost.layer(),
         ),
       ),
@@ -150,7 +150,7 @@ it.effect.each([
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
-        Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
+        Layer.mock(AzureDevOpsApi.AzureDevOpsApi)({
           getPullRequest: () =>
             Effect.succeed({
               number: 42,

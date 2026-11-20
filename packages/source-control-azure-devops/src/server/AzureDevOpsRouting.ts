@@ -8,7 +8,7 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
 import * as AzureDevOpsClient from "../shared/definition.ts";
-import { checkoutRemoteUrl, scopeFromRemoteUrl } from "./AzureDevOpsCli.ts";
+import { checkoutRemoteUrl, scopeFromRemoteUrl } from "./azureDevOpsRemote.ts";
 
 /** An organization with a saved token talks REST; every other one keeps the Azure CLI. */
 export type AzureDevOpsRoute =

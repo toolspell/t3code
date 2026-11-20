@@ -2,6 +2,7 @@ import * as Result from "effect/Result";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  azureCliTimestamp,
   decodeItemContentJson,
   decodeIterationChangesJson,
   decodeIterationsJson,
@@ -99,9 +100,23 @@ describe("decodePullRequestListJson", () => {
     );
 
     expect(batch.items[0]).toMatchObject({
-      createdAt: "2026-07-01T00:00:00Z",
-      updatedAt: "2026-07-05T00:00:00Z",
+      createdAt: "2026-07-01T00:00:00+00:00",
+      updatedAt: "2026-07-05T00:00:00+00:00",
     });
+  });
+
+  // What Python `isoformat` prints for the moment Azure states, as `az repos pr` shows it.
+  it.each([
+    ["2026-11-20T08:45:24.5617533Z", "2026-11-20T08:45:24.561753+00:00"],
+    ["2026-11-20T08:45:24.5617539Z", "2026-11-20T08:45:24.561753+00:00"],
+    ["2026-11-20T08:45:24Z", "2026-11-20T08:45:24+00:00"],
+    ["2026-11-20T08:45:24.000Z", "2026-11-20T08:45:24+00:00"],
+    ["2026-11-20T08:45:24.5Z", "2026-11-20T08:45:24.500000+00:00"],
+    ["2026-11-20T08:45:24.561753+00:00", "2026-11-20T08:45:24.561753+00:00"],
+    ["2026-11-20T10:45:24.5+02:00", "2026-11-20T10:45:24.500000+02:00"],
+    ["not a date", "not a date"],
+  ])("states %s as az does: %s", (azure, cli) => {
+    expect(azureCliTimestamp(azure)).toBe(cli);
   });
 
   it("skips a malformed row but still counts it, so paging does not stop early", () => {

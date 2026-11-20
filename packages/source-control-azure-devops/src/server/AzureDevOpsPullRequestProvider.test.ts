@@ -5,7 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import type { PullRequestCheck, PullRequestCheckStatus } from "@t3tools/contracts";
 
-import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
+import * as AzureDevOpsPullRequestApi from "./AzureDevOpsPullRequestApi.ts";
 import {
   BLOB_BATCH_FILES,
   LOCATION_CACHE_CAPACITY,
@@ -76,7 +76,7 @@ const readSlice = (input: {
 
     const provider = yield* make.pipe(
       Effect.provide(
-        Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
+        Layer.mock(AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi)({
           ...NO_BLOBS,
           getPullRequest: () => Effect.succeed(PULL_REQUEST),
           listIterations: () => Effect.succeed([ITERATION]),
@@ -97,8 +97,7 @@ const readSlice = (input: {
               for (let turn = 0; turn < answersAfter; turn += 1) yield* Effect.yieldNow;
               inFlight -= 1;
               if (refused.has(item.path)) {
-                return yield* new AzureDevOpsPullRequestCli.AzureDevOpsPullRequestReadError({
-                  command: "az",
+                return yield* new AzureDevOpsPullRequestApi.AzureDevOpsPullRequestReadError({
                   cwd: "/w",
                   operation: "readItemContent",
                   cause: "refused",
@@ -136,7 +135,7 @@ describe("getChangeRequest", () => {
     Effect.gen(function* () {
       const provider = yield* make.pipe(
         Effect.provide(
-          Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
+          Layer.mock(AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi)({
             getPullRequest: () => Effect.succeed(PULL_REQUEST),
             listPolicyChecks: () => Effect.succeed([]),
             listLabels: () => Effect.succeed([]),
@@ -144,8 +143,7 @@ describe("getChangeRequest", () => {
               Effect.succeed([ITERATION, { ...ITERATION, id: 4, headCommit: "new-head" }]),
             listIterationChanges: () =>
               Effect.fail(
-                new AzureDevOpsPullRequestCli.AzureDevOpsPullRequestReadError({
-                  command: "az",
+                new AzureDevOpsPullRequestApi.AzureDevOpsPullRequestReadError({
                   cwd: "/w",
                   operation: "listIterationChanges",
                   cause: "unavailable",
@@ -172,7 +170,7 @@ describe("getChangeRequest", () => {
       Effect.gen(function* () {
         const provider = yield* make.pipe(
           Effect.provide(
-            Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
+            Layer.mock(AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi)({
               getPullRequest: () => Effect.succeed(PULL_REQUEST),
               listPolicyChecks: () => Effect.succeed([]),
               listLabels: () => Effect.succeed([]),
@@ -180,8 +178,7 @@ describe("getChangeRequest", () => {
                 state === "missing"
                   ? Effect.succeed([])
                   : Effect.fail(
-                      new AzureDevOpsPullRequestCli.AzureDevOpsPullRequestReadError({
-                        command: "az",
+                      new AzureDevOpsPullRequestApi.AzureDevOpsPullRequestReadError({
                         cwd: "/w",
                         operation: "listIterations",
                         cause: "unavailable",
@@ -209,7 +206,7 @@ describe("getChangeRequest", () => {
         const release = yield* Deferred.make<void>();
         const provider = yield* make.pipe(
           Effect.provide(
-            Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
+            Layer.mock(AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi)({
               getPullRequest: () =>
                 Effect.sync(() => {
                   reads += 1;
@@ -259,20 +256,19 @@ describe("policy checks", () => {
     url: null,
     required: true,
   });
-  const readFailure = new AzureDevOpsPullRequestCli.AzureDevOpsPullRequestReadError({
-    command: "az",
+  const readFailure = new AzureDevOpsPullRequestApi.AzureDevOpsPullRequestReadError({
     cwd: "/w",
     operation: "listPolicyChecks",
     cause: "unavailable",
   });
 
   const provide = (
-    listPolicyChecks: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]["listPolicyChecks"],
+    listPolicyChecks: AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi["Service"]["listPolicyChecks"],
     pullRequest = PULL_REQUEST,
   ) =>
     make.pipe(
       Effect.provide(
-        Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
+        Layer.mock(AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi)({
           getPullRequest: () => Effect.succeed(pullRequest),
           listIterations: () => Effect.succeed([ITERATION]),
           listIterationChanges: () => Effect.succeed({ changes: [], truncated: false }),
@@ -319,7 +315,7 @@ describe("getDiff reads", () => {
 
       const provider = yield* make.pipe(
         Effect.provide(
-          Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
+          Layer.mock(AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi)({
             ...NO_BLOBS,
             getPullRequest: () => Effect.succeed(PULL_REQUEST),
             listIterations: () => Effect.succeed([ITERATION]),
@@ -365,7 +361,7 @@ describe("getDiff reads", () => {
 
       const provider = yield* make.pipe(
         Effect.provide(
-          Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
+          Layer.mock(AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi)({
             getPullRequest: () => Effect.succeed(PULL_REQUEST),
             listIterations: () => Effect.succeed([ITERATION]),
             listIterationChanges: () => Effect.succeed({ changes, truncated: false }),
@@ -433,7 +429,7 @@ describe("getDiff reads", () => {
 
       const provider = yield* make.pipe(
         Effect.provide(
-          Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
+          Layer.mock(AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi)({
             getPullRequest: () => Effect.succeed(PULL_REQUEST),
             listIterations: () => Effect.succeed([ITERATION]),
             listIterationChanges: () =>
@@ -486,7 +482,7 @@ describe("getDiff reads", () => {
 
       const provider = yield* make.pipe(
         Effect.provide(
-          Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
+          Layer.mock(AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi)({
             ...NO_BLOBS,
             getPullRequest: () => Effect.succeed(PULL_REQUEST),
             listIterations: () => Effect.sync(() => ((iterationReads += 1), [ITERATION])),
@@ -615,7 +611,7 @@ describe("what one diff slice spends", () => {
 
       const provider = yield* make.pipe(
         Effect.provide(
-          Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
+          Layer.mock(AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi)({
             ...NO_BLOBS,
             getPullRequest: (input) =>
               Effect.sync(() => {

@@ -6,7 +6,7 @@ import * as Semaphore from "effect/Semaphore";
 import { rollupCheckStatuses } from "@t3tools/source-control-core/server/pullRequestChecks";
 import type { PullRequestCapabilities, PullRequestViewerPermissions } from "@t3tools/contracts";
 
-import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
+import * as AzureDevOpsPullRequestApi from "./AzureDevOpsPullRequestApi.ts";
 import {
   azureDevOpsFilePatch,
   azureDevOpsUnreadableFilePatch,
@@ -121,7 +121,7 @@ const AZURE_DEVOPS_VIEWER_PERMISSIONS: PullRequestViewerPermissions = {
 };
 
 function azureDevOpsProviderFailure(
-  error: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCliError,
+  error: AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApiError,
 ): PullRequestProviderFailure {
   if (error._tag === "AzureDevOpsCliUnavailableError") return { reason: "missing-tool" };
   if (error._tag === "AzureDevOpsCliAuthenticationError") return { reason: "unauthenticated" };
@@ -193,15 +193,15 @@ function toSummary(pullRequest: AzureDevOpsPullRequest): ProviderChangeRequestSu
 }
 
 export const make = Effect.gen(function* () {
-  const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+  const api = yield* AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApi;
   const diffSpawns = yield* Semaphore.make(MAX_DIFF_SPAWNS);
-  const readItemContent = (input: Parameters<typeof cli.readItemContent>[0]) =>
-    diffSpawns.withPermits(1)(cli.readItemContent(input));
-  const readBlobs = (input: Parameters<typeof cli.readBlobs>[0]) =>
-    diffSpawns.withPermits(1)(cli.readBlobs(input));
+  const readItemContent = (input: Parameters<typeof api.readItemContent>[0]) =>
+    diffSpawns.withPermits(1)(api.readItemContent(input));
+  const readBlobs = (input: Parameters<typeof api.readBlobs>[0]) =>
+    diffSpawns.withPermits(1)(api.readBlobs(input));
 
   const fail =
-    (operation: string) => (error: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCliError) =>
+    (operation: string) => (error: AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApiError) =>
       new PullRequestProviderError({
         provider: SourceControlProviderKind.make("azure-devops"),
         operation,
@@ -226,14 +226,14 @@ export const make = Effect.gen(function* () {
   const locations = new Map<string, AzureDevOpsRepositoryLocation>();
   // A pushed iteration never changes, so neither do its commits nor its change list.
   const knownIterations = new Map<string, ReadonlyArray<AzureDevOpsIteration>>();
-  const iterationChanges = new Map<string, AzureDevOpsPullRequestCli.AzureDevOpsIterationChanges>();
+  const iterationChanges = new Map<string, AzureDevOpsPullRequestApi.AzureDevOpsIterationChanges>();
 
   // Reads still running, so a location lookup joins one instead of spawning its own az process.
   const pendingLocations = new Map<
     string,
     Deferred.Deferred<
       AzureDevOpsRepositoryLocation | null,
-      AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCliError
+      AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApiError
     >
   >();
 
@@ -242,10 +242,10 @@ export const make = Effect.gen(function* () {
       const key = `${input.cwd} ${input.number}`;
       const pending = Deferred.makeUnsafe<
         AzureDevOpsRepositoryLocation | null,
-        AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCliError
+        AzureDevOpsPullRequestApi.AzureDevOpsPullRequestApiError
       >();
       pendingLocations.set(key, pending);
-      return cli.getPullRequest({ cwd: input.cwd, number: input.number }).pipe(
+      return api.getPullRequest({ cwd: input.cwd, number: input.number }).pipe(
         Effect.map((pullRequest) => {
           if (pullRequest.location !== null) {
             remember(locations, LOCATION_CACHE_CAPACITY, key, pullRequest.location);
@@ -280,7 +280,7 @@ export const make = Effect.gen(function* () {
     });
 
   const readChecks = (input: { readonly cwd: string }, pullRequest: AzureDevOpsPullRequest) =>
-    cli.listPolicyChecks({
+    api.listPolicyChecks({
       cwd: input.cwd,
       number: pullRequest.number,
       isDraft: pullRequest.isDraft,
@@ -302,7 +302,7 @@ export const make = Effect.gen(function* () {
     ) {
       return { location, iterations: held };
     }
-    const iterations = yield* cli.listIterations({
+    const iterations = yield* api.listIterations({
       cwd: input.cwd,
       location,
       number: input.number,
@@ -321,7 +321,7 @@ export const make = Effect.gen(function* () {
     const held = recall(iterationChanges, key);
     return held !== undefined
       ? Effect.succeed(held)
-      : cli
+      : api
           .listIterationChanges(input)
           .pipe(
             Effect.map((listed) => remember(iterationChanges, CHANGES_CACHE_CAPACITY, key, listed)),
@@ -377,7 +377,7 @@ export const make = Effect.gen(function* () {
       ? Effect.succeed({
           changes: [],
           truncated: false,
-        } as AzureDevOpsPullRequestCli.AzureDevOpsIterationChanges)
+        } as AzureDevOpsPullRequestApi.AzureDevOpsIterationChanges)
       : changesOf({
           cwd: input.cwd,
           location: input.location,
@@ -394,10 +394,10 @@ export const make = Effect.gen(function* () {
     repositoryKey: ({ canonicalKey }) => canonicalKey,
 
     getViewer: (input) =>
-      cli.getViewer({ cwd: input.cwd }).pipe(Effect.mapError(fail("getViewer"))),
+      api.getViewer({ cwd: input.cwd }).pipe(Effect.mapError(fail("getViewer"))),
 
     listChangeRequests: (input) =>
-      cli
+      api
         .listPullRequests({
           cwd: input.cwd,
           repository: input.repository,
@@ -468,7 +468,7 @@ export const make = Effect.gen(function* () {
         const iterations =
           location === null
             ? []
-            : yield* cli
+            : yield* api
                 .listIterations({ cwd: input.cwd, location, number: input.number })
                 .pipe(Effect.orElseSucceed(() => []));
         // The trial merge's lastMergeSourceCommit can lag behind a new source push.
@@ -489,7 +489,7 @@ export const make = Effect.gen(function* () {
         const labels =
           location === null
             ? pullRequest.labels
-            : yield* cli
+            : yield* api
                 .listLabels({ cwd: input.cwd, location, number: input.number })
                 .pipe(Effect.orElseSucceed(() => pullRequest.labels));
         const detail: ProviderChangeRequestDetail = {
@@ -520,7 +520,7 @@ export const make = Effect.gen(function* () {
         Effect.flatMap((location) =>
           (location === null
             ? Effect.succeed({ comments: [], truncated: true })
-            : cli
+            : api
                 .listThreads({
                   cwd: input.cwd,
                   location,
@@ -729,7 +729,7 @@ export const make = Effect.gen(function* () {
     ),
 
     runAction: (input) =>
-      cli
+      api
         .runPullRequestAction({
           cwd: input.cwd,
           number: input.number,
@@ -751,7 +751,7 @@ export const make = Effect.gen(function* () {
         ),
 
     updateChangeRequest: (input) =>
-      cli
+      api
         .updatePullRequest({
           cwd: input.cwd,
           number: input.number,
@@ -771,7 +771,7 @@ export const make = Effect.gen(function* () {
       ),
 
     setReviewerRequest: (input) =>
-      cli
+      api
         .setPullRequestReviewers({
           cwd: input.cwd,
           number: input.number,

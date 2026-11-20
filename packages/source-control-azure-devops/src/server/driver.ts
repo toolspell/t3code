@@ -7,16 +7,16 @@ import * as Layer from "effect/Layer";
 
 import { definition } from "../shared/definition.ts";
 
-import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
-import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
+import * as AzureDevOpsApi from "./AzureDevOpsApi.ts";
+import * as AzureDevOpsPullRequestApi from "./AzureDevOpsPullRequestApi.ts";
 import * as AzureDevOpsIssueTracker from "./AzureDevOpsIssueTracker.ts";
 import * as AzureDevOpsPullRequestProvider from "./AzureDevOpsPullRequestProvider.ts";
 import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
 import * as AzureDevOpsRouting from "./AzureDevOpsRouting.ts";
 import * as AzureDevOpsSourceControlProvider from "./AzureDevOpsSourceControlProvider.ts";
 
-const services = AzureDevOpsPullRequestCli.layer.pipe(
-  Layer.provideMerge(AzureDevOpsCli.layer),
+const services = AzureDevOpsPullRequestApi.layer.pipe(
+  Layer.provideMerge(AzureDevOpsApi.layer),
   Layer.provideMerge(AzureDevOpsRouting.layer),
   Layer.provideMerge(AzureDevOpsRest.layer),
 );

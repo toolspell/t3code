@@ -24,6 +24,7 @@ import {
   decodeAzureDevOpsPullRequestPageJson,
   type NormalizedAzureDevOpsPullRequestRecord,
 } from "./azureDevOpsPullRequests.ts";
+import { checkoutRemoteUrl, scopeFromRemoteUrl } from "./azureDevOpsRemote.ts";
 import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
 import * as AzureDevOpsRouting from "./AzureDevOpsRouting.ts";
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
@@ -225,8 +226,8 @@ export interface AzureDevOpsRepositoryCloneUrls {
   readonly sshUrl: string;
 }
 
-export class AzureDevOpsCli extends Context.Service<
-  AzureDevOpsCli,
+export class AzureDevOpsApi extends Context.Service<
+  AzureDevOpsApi,
   {
     readonly execute: (input: {
       readonly cwd: string;
@@ -285,7 +286,7 @@ export class AzureDevOpsCli extends Context.Service<
       readonly remoteUrl?: string;
     }) => Effect.Effect<string | null, AzureDevOpsRoutedError>;
   }
->()("@t3tools/source-control-azure-devops/server/AzureDevOpsCli") {}
+>()("@t3tools/source-control-azure-devops/server/AzureDevOpsApi") {}
 
 function normalizeChangeRequestId(reference: string): string {
   const trimmed = reference.trim().replace(/^#/, "");
@@ -376,107 +377,6 @@ function decodeAzureDevOpsJson<S extends Schema.Top>(
   );
 }
 
-/** The remote that scopes `az` when T3 selected none, from `git remote -v` output. */
-export function primaryRemoteUrl(output: string) {
-  if (!output.endsWith("\n")) return null;
-  const remotes = new Map<string, string>();
-  for (const line of output.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) continue;
-    const match = /^(\S+)\s+(\S+)\s+\((fetch|push)\)$/u.exec(trimmed);
-    if (!match?.[1] || !match[2]) return null;
-    if (match[3] === "fetch" && !remotes.has(match[1])) remotes.set(match[1], match[2]);
-  }
-  // Match the provider context SourceControlProviderRegistry binds, and `az`'s own detection.
-  return (
-    remotes.get("origin") ??
-    [...remotes.values()].find((url) => scopeFromRemoteUrl(url) !== null) ??
-    null
-  );
-}
-
-/** Organization, project, and repository of an Azure DevOps Services remote; null for any other. */
-export function scopeFromRemoteUrl(remote: string) {
-  try {
-    const scp = /^(?:[^@/]+@)?([^/:]+):(.+)$/u.exec(remote);
-    const url = new URL(
-      remote.includes("://") ? remote : scp ? `ssh://${scp[1]}/${scp[2]}` : remote,
-    );
-    if (url.search || url.hash) return null;
-    const legacy = url.hostname.endsWith(".visualstudio.com");
-    const parts = url.pathname.slice(1).split("/").map(decodeURIComponent);
-    let organization: string | undefined;
-    if (
-      url.protocol === "ssh:" &&
-      (url.hostname === "ssh.dev.azure.com" || url.hostname === "vs-ssh.visualstudio.com")
-    ) {
-      if (parts.length !== 4 || parts.shift() !== "v3") return null;
-      organization = parts.shift();
-    } else if (url.protocol === "https:") {
-      if (url.hostname === "dev.azure.com") organization = parts.shift();
-      else {
-        organization = /^([^.]+)\.visualstudio\.com$/u.exec(url.hostname)?.[1];
-        if (!organization) return null;
-        if (parts[0]?.toLowerCase() === "defaultcollection") parts.shift();
-      }
-      if (parts.length !== 3 || parts[1] !== "_git") return null;
-      parts.splice(1, 1);
-    } else return null;
-    const [project, repository] = parts;
-    if (!organization || !project || !repository) return null;
-    // `az` replaces a value starting with `@` by the contents of that local file.
-    if ([organization, project, repository].some((part) => /^@|[\p{Cc}/\\]/u.test(part))) {
-      return null;
-    }
-    if (legacy && !/^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/u.test(organization))
-      return null;
-    return {
-      organizationName: organization,
-      // az keys organization-scoped credentials by the original host family.
-      organization: legacy
-        ? `https://${organization}.visualstudio.com`
-        : `https://dev.azure.com/${encodeURIComponent(organization)}`,
-      project,
-      repository,
-    };
-  } catch {
-    return null;
-  }
-}
-
-/** The checkout's primary remote, or null when git cannot name one. */
-export const checkoutRemoteUrl = (
-  process: SourceControlHost.SourceControlHost["Service"]["process"],
-  cwd: string,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-) =>
-  process
-    .run({
-      operation: "AzureDevOpsCli.resolveScope",
-      command: "git",
-      args: ["remote", "-v"],
-      cwd,
-      env: {
-        GIT_DIR: undefined,
-        GIT_WORK_TREE: undefined,
-        GIT_COMMON_DIR: undefined,
-        GIT_INDEX_FILE: undefined,
-        GIT_OBJECT_DIRECTORY: undefined,
-        GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined,
-      },
-      timeoutMs,
-      maxOutputBytes: 64 * 1024,
-      allowNonZeroExit: true,
-    })
-    .pipe(
-      Effect.map((remotes) =>
-        remotes.exitCode === 0 && !remotes.stdoutTruncated && !remotes.stdoutInvalidUtf8
-          ? primaryRemoteUrl(remotes.stdout)
-          : null,
-      ),
-      Effect.orElseSucceed(() => null),
-    );
-
 const remoteOf = (input: { readonly remoteUrl?: string }) =>
   input.remoteUrl === undefined ? {} : { remoteUrl: input.remoteUrl };
 
@@ -543,7 +443,7 @@ export interface AzureCliInvocation {
  * `PYTHONIOENCODING` are ignored, and the ANSI code page loses text `az` cannot encode.
  * Resolved once when the service is built: installing `az` later needs a restart.
  */
-export const azureCliInvocation = Effect.fn("AzureDevOpsCli.invocation")(function* () {
+export const azureCliInvocation = Effect.fn("AzureDevOpsApi.invocation")(function* () {
   if ((yield* HostProcess.Platform) !== "win32") {
     return { command: "az", args: [] } satisfies AzureCliInvocation;
   }
@@ -579,7 +479,7 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const invocation = yield* azureCliInvocation();
 
-  const execute: AzureDevOpsCli["Service"]["execute"] = Effect.fn("AzureDevOpsCli.execute")(
+  const execute: AzureDevOpsApi["Service"]["execute"] = Effect.fn("AzureDevOpsApi.execute")(
     function* (input) {
       let args = input.args;
       if (detectsScope(args)) {
@@ -590,7 +490,7 @@ export const make = Effect.gen(function* () {
       }
       return yield* process
         .run({
-          operation: "AzureDevOpsCli.execute",
+          operation: "AzureDevOpsApi.execute",
           command: invocation.command,
           args: [...invocation.args, ...args],
           cwd: input.cwd,
@@ -617,13 +517,13 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  const executeJson = (input: Parameters<AzureDevOpsCli["Service"]["execute"]>[0]) =>
+  const executeJson = (input: Parameters<AzureDevOpsApi["Service"]["execute"]>[0]) =>
     execute({
       ...input,
       args: [...input.args, "--only-show-errors", "--output", "json"],
     });
 
-  type ListInput = Parameters<AzureDevOpsCli["Service"]["listPullRequests"]>[0];
+  type ListInput = Parameters<AzureDevOpsApi["Service"]["listPullRequests"]>[0];
   const cliListPullRequests = (input: ListInput, branch: string, refPrefix: string) =>
     executeJson({
       cwd: input.cwd,
@@ -667,7 +567,7 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const cliGetPullRequest = (input: Parameters<AzureDevOpsCli["Service"]["getPullRequest"]>[0]) =>
+  const cliGetPullRequest = (input: Parameters<AzureDevOpsApi["Service"]["getPullRequest"]>[0]) =>
     executeJson({
       cwd: input.cwd,
       ...remoteOf(input),
@@ -703,7 +603,7 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  type RepositoryInput = Parameters<AzureDevOpsCli["Service"]["getRepositoryCloneUrls"]>[0];
+  type RepositoryInput = Parameters<AzureDevOpsApi["Service"]["getRepositoryCloneUrls"]>[0];
   /** A named project wins, as for `az repos show --project`; otherwise the remote's. */
   const restRepository = (
     route: AzureDevOpsRouting.AzureDevOpsRestRoute,
@@ -772,9 +672,9 @@ export const make = Effect.gen(function* () {
     );
   };
 
-  return AzureDevOpsCli.of({
+  return AzureDevOpsApi.of({
     execute,
-    listPullRequests: Effect.fn("AzureDevOpsCli.listPullRequests")(function (input) {
+    listPullRequests: Effect.fn("AzureDevOpsApi.listPullRequests")(function (input) {
       const branch = SourceControlProvider.sourceBranch(input);
       // az checks literal ref prefixes before constructing the request URL.
       const refPrefix =
@@ -805,7 +705,7 @@ export const make = Effect.gen(function* () {
         cli: () => cliListPullRequests(input, branch, refPrefix),
       });
     }),
-    getPullRequest: Effect.fn("AzureDevOpsCli.getPullRequest")(function (input) {
+    getPullRequest: Effect.fn("AzureDevOpsApi.getPullRequest")(function (input) {
       return AzureDevOpsRouting.byRoute(routing, input, {
         rest: (route) =>
           rest
@@ -822,7 +722,7 @@ export const make = Effect.gen(function* () {
         cli: () => cliGetPullRequest(input),
       });
     }),
-    getRepositoryCloneUrls: Effect.fn("AzureDevOpsCli.getRepositoryCloneUrls")(function (input) {
+    getRepositoryCloneUrls: Effect.fn("AzureDevOpsApi.getRepositoryCloneUrls")(function (input) {
       return AzureDevOpsRouting.byRoute(routing, input, {
         rest: (route) =>
           restRepository(route, input.repository, "getRepositoryCloneUrls").pipe(
@@ -831,7 +731,7 @@ export const make = Effect.gen(function* () {
         cli: () => cliGetRepositoryCloneUrls(input),
       });
     }),
-    getDefaultBranch: Effect.fn("AzureDevOpsCli.getDefaultBranch")(function (input) {
+    getDefaultBranch: Effect.fn("AzureDevOpsApi.getDefaultBranch")(function (input) {
       return AzureDevOpsRouting.byRoute(routing, input, {
         rest: (route) =>
           restRepository(route, input.repository, "getDefaultBranch").pipe(
@@ -841,7 +741,7 @@ export const make = Effect.gen(function* () {
       });
     }),
 
-    createRepository: Effect.fn("AzureDevOpsCli.createRepository")(function (input) {
+    createRepository: Effect.fn("AzureDevOpsApi.createRepository")(function (input) {
       const repository = parseRepositorySpecifier(input.repository);
       // Project/organization permissions control visibility; `az repos create` has no flag.
       return AzureDevOpsRouting.byRoute(routing, input, {
@@ -897,7 +797,7 @@ export const make = Effect.gen(function* () {
           ),
       });
     }),
-    createPullRequest: Effect.fn("AzureDevOpsCli.createPullRequest")(function (input) {
+    createPullRequest: Effect.fn("AzureDevOpsApi.createPullRequest")(function (input) {
       const target = input.target?.refName ?? input.baseBranch;
       const source = SourceControlProvider.sourceBranch(input);
       return AzureDevOpsRouting.byRoute(routing, input, {
@@ -956,4 +856,4 @@ export const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(AzureDevOpsCli, make);
+export const layer = Layer.effect(AzureDevOpsApi, make);

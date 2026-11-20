@@ -25,7 +25,7 @@ import {
 } from "@t3tools/source-control-core/server/IssueTracker";
 import type { SourceControlRateLimitPausedError } from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
-import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
+import * as AzureDevOpsApi from "./AzureDevOpsApi.ts";
 import { type AzureDevOpsIdentityError, resolveIdentity } from "./azureDevOpsIdentities.ts";
 import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
 import * as AzureDevOpsRouting from "./AzureDevOpsRouting.ts";
@@ -234,7 +234,7 @@ function restReasonFor(error: RestFailure): {
   }
 }
 
-function reasonFor(error: AzureDevOpsCli.AzureDevOpsCliError): IssueTrackerError["reason"] {
+function reasonFor(error: AzureDevOpsApi.AzureDevOpsCliError): IssueTrackerError["reason"] {
   switch (error._tag) {
     case "AzureDevOpsCliUnavailableError":
       return "missing-tool";
@@ -278,17 +278,17 @@ const fieldPatch = (fields: ReadonlyArray<Field>) =>
 export const make: Effect.Effect<
   IssueTrackerApi,
   never,
-  | AzureDevOpsCli.AzureDevOpsCli
+  | AzureDevOpsApi.AzureDevOpsApi
   | AzureDevOpsRest.AzureDevOpsRest
   | AzureDevOpsRouting.AzureDevOpsRouting
   | FileSystem.FileSystem
 > = Effect.gen(function* () {
-  const azure = yield* AzureDevOpsCli.AzureDevOpsCli;
+  const azure = yield* AzureDevOpsApi.AzureDevOpsApi;
   const rest = yield* AzureDevOpsRest.AzureDevOpsRest;
   const routing = yield* AzureDevOpsRouting.AzureDevOpsRouting;
   const fs = yield* FileSystem.FileSystem;
 
-  const fail = (operation: string) => (error: AzureDevOpsCli.AzureDevOpsCliError) =>
+  const fail = (operation: string) => (error: AzureDevOpsApi.AzureDevOpsCliError) =>
     new IssueTrackerError({
       tracker: KIND,
       operation,
@@ -840,9 +840,9 @@ export const make: Effect.Effect<
     readonly input: { readonly title: string; readonly body: string };
   }): Effect.Effect<AzureDevOpsWorkItem | null, IssueTrackerError> => {
     const { cwd, scope, input } = args;
-    const title = AzureDevOpsCli.textOption("--title", input.title);
+    const title = AzureDevOpsApi.textOption("--title", input.title);
     const body =
-      input.body.length === 0 ? undefined : AzureDevOpsCli.textOption("--description", input.body);
+      input.body.length === 0 ? undefined : AzureDevOpsApi.textOption("--description", input.body);
     // az has one stdin, so a second value read from it goes in a call of its own.
     const bodyFollows = title.stdin !== undefined && body?.stdin !== undefined;
     return fieldArgs("create", args.fields).pipe(
@@ -1113,10 +1113,10 @@ export const make: Effect.Effect<
       const args = yield* fieldArgs("update", fields);
       yield* owned("update", input.cwd, scope);
       const texts = [
-        ...(input.title === undefined ? [] : [AzureDevOpsCli.textOption("--title", input.title)]),
+        ...(input.title === undefined ? [] : [AzureDevOpsApi.textOption("--title", input.title)]),
         ...(input.body === undefined
           ? []
-          : [AzureDevOpsCli.textOption("--description", input.body)]),
+          : [AzureDevOpsApi.textOption("--description", input.body)]),
       ];
       // az has one stdin, so each value read from it needs its own call.
       const batches =

@@ -12,7 +12,7 @@ import * as Option from "effect/Option";
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
-import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
+import * as AzureDevOpsApi from "./AzureDevOpsApi.ts";
 import * as AzureDevOpsSourceControlProvider from "./AzureDevOpsSourceControlProvider.ts";
 
 const withRepository = <A, E>(
@@ -48,7 +48,7 @@ const withRepository = <A, E>(
     yield* git("config", "core.autocrlf", "false");
     yield* git("remote", "add", "origin", cwd);
     const provider = yield* AzureDevOpsSourceControlProvider.make.pipe(
-      Effect.provide(Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({})),
+      Effect.provide(Layer.mock(AzureDevOpsApi.AzureDevOpsApi)({})),
     );
     return yield* test({
       git,

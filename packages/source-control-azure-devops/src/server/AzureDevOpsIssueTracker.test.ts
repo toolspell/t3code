@@ -8,7 +8,7 @@ import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/h
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
-import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
+import * as AzureDevOpsApi from "./AzureDevOpsApi.ts";
 import * as AzureDevOpsIssueTracker from "./AzureDevOpsIssueTracker.ts";
 import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
 import * as AzureDevOpsRouting from "./AzureDevOpsRouting.ts";
@@ -143,7 +143,7 @@ function tracker(onExecute: (args: ReadonlyArray<string>, stdin: string | undefi
       Layer.mergeAll(
         NodeFileSystem.layer,
         cliRoute,
-        Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
+        Layer.mock(AzureDevOpsApi.AzureDevOpsApi)({
           execute: ({ args, stdin }) =>
             Effect.succeed(TestSourceControlHost.processOutput(onExecute(args, stdin))),
         }),
@@ -234,66 +234,70 @@ describe("AzureDevOpsIssueTracker", () => {
       let finished = "Shipped";
       let workflowUnavailable = false;
       const api = yield* AzureDevOpsIssueTracker.make.pipe(
-        Effect.provide(cliRoute),
         Effect.provide(
-          Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
-            execute: ({ args }) => {
-              const resource = args[args.indexOf("--resource") + 1];
-              if (resource === "workitems") {
-                // `az devops invoke` resolves `wit/workitems` to the create route
-                // (`.../workitems/${type}`) and fails before sending anything.
-                return Effect.fail(
-                  new AzureDevOpsCli.AzureDevOpsCommandFailedError({
-                    operation: "execute",
-                    command: "az",
-                    cwd: "/w",
-                    argumentCount: args.length,
-                    cause: "KeyError: 'type'",
-                  }),
-                );
-              }
-              if (resource === "workitemtypes") {
-                typeReads += 1;
-                if (workflowUnavailable) {
+          Layer.merge(
+            cliRoute,
+            Layer.mock(AzureDevOpsApi.AzureDevOpsApi)({
+              execute: ({ args }) => {
+                const resource = args[args.indexOf("--resource") + 1];
+                if (resource === "workitems") {
+                  // `az devops invoke` resolves `wit/workitems` to the create route
+                  // (`.../workitems/${type}`) and fails before sending anything.
                   return Effect.fail(
-                    new AzureDevOpsCli.AzureDevOpsCommandFailedError({
+                    new AzureDevOpsApi.AzureDevOpsCommandFailedError({
                       operation: "execute",
                       command: "az",
                       cwd: "/w",
                       argumentCount: args.length,
-                      cause: "workflow metadata unavailable",
+                      cause: "KeyError: 'type'",
                     }),
                   );
                 }
-                return Effect.succeed(
-                  TestSourceControlHost.processOutput(
-                    encode({
-                      value: [{ name: "Bug", states: [{ name: finished, category: "Completed" }] }],
-                    }),
-                  ),
-                );
-              }
-              if (resource !== "wiql" && resource !== "workitemsbatch") {
-                return Effect.succeed(TestSourceControlHost.processOutput(answer(args)));
-              }
-              return fs.readFileString(args[args.indexOf("--in-file") + 1]!).pipe(
-                Effect.orDie,
-                Effect.map((body) => {
-                  if (resource === "wiql") {
-                    bodies.push(body);
-                    return TestSourceControlHost.processOutput(
-                      encode({ workItems: [{ id: 9 }, { id: 7 }, { id: 3 }] }),
+                if (resource === "workitemtypes") {
+                  typeReads += 1;
+                  if (workflowUnavailable) {
+                    return Effect.fail(
+                      new AzureDevOpsApi.AzureDevOpsCommandFailedError({
+                        operation: "execute",
+                        command: "az",
+                        cwd: "/w",
+                        argumentCount: args.length,
+                        cause: "workflow metadata unavailable",
+                      }),
                     );
                   }
-                  hydrated.push((JSON.parse(body) as { ids: number[] }).ids.join(","));
-                  // The page as REST answers it: an envelope, in an order of its own.
-                  return TestSourceControlHost.processOutput(
-                    encode({ count: 2, value: [WORK_ITEM, { ...WORK_ITEM, id: 9 }] }),
+                  return Effect.succeed(
+                    TestSourceControlHost.processOutput(
+                      encode({
+                        value: [
+                          { name: "Bug", states: [{ name: finished, category: "Completed" }] },
+                        ],
+                      }),
+                    ),
                   );
-                }),
-              );
-            },
-          }),
+                }
+                if (resource !== "wiql" && resource !== "workitemsbatch") {
+                  return Effect.succeed(TestSourceControlHost.processOutput(answer(args)));
+                }
+                return fs.readFileString(args[args.indexOf("--in-file") + 1]!).pipe(
+                  Effect.orDie,
+                  Effect.map((body) => {
+                    if (resource === "wiql") {
+                      bodies.push(body);
+                      return TestSourceControlHost.processOutput(
+                        encode({ workItems: [{ id: 9 }, { id: 7 }, { id: 3 }] }),
+                      );
+                    }
+                    hydrated.push((JSON.parse(body) as { ids: number[] }).ids.join(","));
+                    // The page as REST answers it: an envelope, in an order of its own.
+                    return TestSourceControlHost.processOutput(
+                      encode({ count: 2, value: [WORK_ITEM, { ...WORK_ITEM, id: 9 }] }),
+                    );
+                  }),
+                );
+              },
+            }),
+          ),
         ),
       );
       const list = api.listIssues({
@@ -529,7 +533,7 @@ describe("AzureDevOpsIssueTracker", () => {
               FileSystem.FileSystem,
               FileSystem.makeNoop({ makeTempFileScoped: () => Effect.fail(denied) }),
             ),
-            Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({}),
+            Layer.mock(AzureDevOpsApi.AzureDevOpsApi)({}),
             cliRoute,
           ),
         ),
@@ -618,12 +622,12 @@ function restAnswer(url: URL, body: unknown): Response {
 /** Organization `acme` has a saved token; any other one takes `execute`, which answers as `az`. */
 function restTracker(respond: (url: URL, body: unknown) => Response | undefined = () => undefined) {
   const requests: SeenRequest[] = [];
-  const execute = vi.fn<AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]>(({ args }) =>
+  const execute = vi.fn<AzureDevOpsApi.AzureDevOpsApi["Service"]["execute"]>(({ args }) =>
     Effect.succeed(TestSourceControlHost.processOutput(answer(args))),
   );
   const layer = Layer.mergeAll(
     NodeFileSystem.layer,
-    Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({ execute }),
+    Layer.mock(AzureDevOpsApi.AzureDevOpsApi)({ execute }),
     AzureDevOpsRouting.layer,
     AzureDevOpsRest.layer.pipe(
       Layer.provide(SourceControlRateLimit.layer),

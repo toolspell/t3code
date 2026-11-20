@@ -15,10 +15,10 @@ import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSour
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import { AzureCliInstallLocation, type AzureCliInstall } from "./azureCliLauncher.ts";
-import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
+import * as AzureDevOpsApi from "./AzureDevOpsApi.ts";
 import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
 import * as AzureDevOpsRouting from "./AzureDevOpsRouting.ts";
-import { primaryRemoteUrl, scopeAzureCliArgs } from "./AzureDevOpsCli.ts";
+import { scopeAzureCliArgs } from "./AzureDevOpsApi.ts";
 
 const processOutput = (stdout: string): SourceControlHost.SourceControlProcessOutput => ({
   exitCode: ChildProcessSpawner.ExitCode(0),
@@ -44,7 +44,7 @@ const layerSupport = Layer.mergeAll(
 );
 // No saved token: every call takes the Azure CLI, and REST must not be reached.
 const layer = Layer.mergeAll(
-  AzureDevOpsCli.layer.pipe(
+  AzureDevOpsApi.layer.pipe(
     Layer.provide(AzureDevOpsRouting.layer),
     Layer.provide(Layer.mock(AzureDevOpsRest.AzureDevOpsRest)({})),
     Layer.provide(layerSupport),
@@ -56,7 +56,7 @@ afterEach(() => {
   mockRun.mockReset();
 });
 
-describe("AzureDevOpsCli.layer", () => {
+describe("AzureDevOpsApi.layer", () => {
   it.effect("parses pull request view output", () =>
     Effect.gen(function* () {
       mockRun.mockReturnValueOnce(
@@ -81,7 +81,7 @@ describe("AzureDevOpsCli.layer", () => {
         ),
       );
 
-      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      const az = yield* AzureDevOpsApi.AzureDevOpsApi;
       const result = yield* az.getPullRequest({
         cwd: "/repo",
         reference: "#42",
@@ -117,7 +117,7 @@ describe("AzureDevOpsCli.layer", () => {
         "rate-limited",
       );
       assert.deepStrictEqual(call, {
-        operation: "AzureDevOpsCli.execute",
+        operation: "AzureDevOpsApi.execute",
         command: "az",
         args: [
           "repos",
@@ -158,7 +158,7 @@ describe("AzureDevOpsCli.layer", () => {
         ),
       );
 
-      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      const az = yield* AzureDevOpsApi.AzureDevOpsApi;
       const result = yield* az.getPullRequest({ cwd: "/repo", reference: "43" });
 
       assert.strictEqual(result.isCrossRepository, true);
@@ -188,7 +188,7 @@ describe("AzureDevOpsCli.layer", () => {
         ),
       );
 
-      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      const az = yield* AzureDevOpsApi.AzureDevOpsApi;
       const result = yield* az.getPullRequest({
         cwd: "/repo",
         reference: "863",
@@ -219,7 +219,7 @@ describe("AzureDevOpsCli.layer", () => {
         ),
       );
 
-      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      const az = yield* AzureDevOpsApi.AzureDevOpsApi;
       const result = yield* az.getRepositoryCloneUrls({
         cwd: "/repo",
         repository: "repo",
@@ -249,7 +249,7 @@ describe("AzureDevOpsCli.layer", () => {
         ),
       );
 
-      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      const az = yield* AzureDevOpsApi.AzureDevOpsApi;
       yield* az.getRepositoryCloneUrls({ cwd: "/somewhere", repository: "project/repo" });
 
       assert.deepStrictEqual(mockRun.mock.calls.at(-1)?.[0].args, [
@@ -272,7 +272,7 @@ describe("AzureDevOpsCli.layer", () => {
     Effect.gen(function* () {
       mockRun.mockReturnValueOnce(Effect.succeed(processOutput("[]")));
 
-      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      const az = yield* AzureDevOpsApi.AzureDevOpsApi;
       yield* az.listPullRequests({
         cwd: "/somewhere",
         headSelector: "user/feat/1-(#2)-slug",
@@ -302,7 +302,7 @@ describe("AzureDevOpsCli.layer", () => {
 
   it.effect("sends a title that looks like `@path` as text, not as a file for az to read", () =>
     Effect.gen(function* () {
-      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      const az = yield* AzureDevOpsApi.AzureDevOpsApi;
       for (const title of ["@notes.txt", "a=@notes.txt"]) {
         mockRun.mockReturnValueOnce(Effect.succeed(processOutput("{}")));
         yield* az.createPullRequest({
@@ -333,7 +333,7 @@ describe("AzureDevOpsCli.layer", () => {
   it.effect("preserves VCS causes without copying upstream details into messages", () =>
     Effect.gen(function* () {
       const cause = new VcsProcessExitError({
-        operation: "AzureDevOpsCli.execute",
+        operation: "AzureDevOpsApi.execute",
         command: "az repos list --organization sensitive-upstream-detail",
         cwd: "/repo",
         exitCode: 1,
@@ -341,10 +341,10 @@ describe("AzureDevOpsCli.layer", () => {
       });
       mockRun.mockReturnValueOnce(Effect.fail(cause));
 
-      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      const az = yield* AzureDevOpsApi.AzureDevOpsApi;
       const error = yield* az.execute({ cwd: "/repo", args: ["repos", "list"] }).pipe(Effect.flip);
 
-      assert.instanceOf(error, AzureDevOpsCli.AzureDevOpsCommandFailedError);
+      assert.instanceOf(error, AzureDevOpsApi.AzureDevOpsCommandFailedError);
       assert.strictEqual(error.operation, "execute");
       assert.strictEqual(error.command, "az");
       assert.strictEqual(error.cwd, "/repo");
@@ -366,7 +366,7 @@ describe("AzureDevOpsCli.layer", () => {
         pathOrDescriptor: cwd,
       });
       const cause = new VcsProcessSpawnError({
-        operation: "AzureDevOpsCli.execute",
+        operation: "AzureDevOpsApi.execute",
         command: "az",
         cwd,
         argumentCount: 2,
@@ -374,10 +374,10 @@ describe("AzureDevOpsCli.layer", () => {
       });
       mockRun.mockReturnValueOnce(Effect.fail(cause));
 
-      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      const az = yield* AzureDevOpsApi.AzureDevOpsApi;
       const error = yield* az.execute({ cwd, args: ["repos", "list"] }).pipe(Effect.flip);
 
-      assert.instanceOf(error, AzureDevOpsCli.AzureDevOpsCommandFailedError);
+      assert.instanceOf(error, AzureDevOpsApi.AzureDevOpsCommandFailedError);
       assert.strictEqual(error.cwd, cwd);
       assert.strictEqual(error.cause, cause);
     }).pipe(Effect.provide(layer)),
@@ -386,7 +386,7 @@ describe("AzureDevOpsCli.layer", () => {
   it.effect("preserves rate-limit failures as a distinct error", () =>
     Effect.gen(function* () {
       const cause = new VcsProcessExitError({
-        operation: "AzureDevOpsCli.execute",
+        operation: "AzureDevOpsApi.execute",
         command: "az",
         cwd: "/repo",
         argumentCount: 2,
@@ -396,16 +396,16 @@ describe("AzureDevOpsCli.layer", () => {
       });
       mockRun.mockReturnValueOnce(Effect.fail(cause));
 
-      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      const az = yield* AzureDevOpsApi.AzureDevOpsApi;
       const error = yield* az.execute({ cwd: "/repo", args: ["repos", "list"] }).pipe(Effect.flip);
 
-      assert.instanceOf(error, AzureDevOpsCli.AzureDevOpsCliRateLimitError);
+      assert.instanceOf(error, AzureDevOpsApi.AzureDevOpsCliRateLimitError);
       assert.strictEqual(error.cause, cause);
     }).pipe(Effect.provide(layer)),
   );
 });
 
-describe("AzureDevOpsCli over REST", () => {
+describe("AzureDevOpsApi over REST", () => {
   /** `saveToken(false)` runs a call through `az`, `saveToken(true)` through `respond`. */
   function routed(respond: (request: HttpClientRequest.HttpClientRequest) => Response) {
     const requests: Array<HttpClientRequest.HttpClientRequest> = [];
@@ -428,7 +428,7 @@ describe("AzureDevOpsCli over REST", () => {
       NodeServices.layer,
       Layer.succeed(HostProcess.Platform, "linux"),
     );
-    const layer = AzureDevOpsCli.layer.pipe(
+    const layer = AzureDevOpsApi.layer.pipe(
       Layer.provide(AzureDevOpsRouting.layer),
       Layer.provide(
         AzureDevOpsRest.layer.pipe(
@@ -478,7 +478,7 @@ describe("AzureDevOpsCli over REST", () => {
     project: { name: "Other Project" },
     defaultBranch: "refs/heads/trunk",
   };
-  type Az = AzureDevOpsCli.AzureDevOpsCli["Service"];
+  type Az = AzureDevOpsApi.AzureDevOpsApi["Service"];
 
   it.effect.each([
     {
@@ -543,7 +543,7 @@ describe("AzureDevOpsCli over REST", () => {
   ])("reads $read over REST as az reads it", ({ call, body, azOutput, path, query }) => {
     const { requests, az, layer, saveToken } = routed(() => Response.json(body));
     return Effect.gen(function* () {
-      const cli = yield* AzureDevOpsCli.AzureDevOpsCli;
+      const cli = yield* AzureDevOpsApi.AzureDevOpsApi;
       az.mockReturnValue(Effect.succeed(processOutput(JSON.stringify(azOutput))));
       const viaCli = yield* call(cli);
       az.mockClear();
@@ -583,7 +583,7 @@ describe("AzureDevOpsCli over REST", () => {
         const directory = yield* fileSystem.makeTempDirectoryScoped();
         const bodyFile = `${directory}/body.md`;
         yield* fileSystem.writeFileString(bodyFile, "@notes.txt\n- from the file");
-        const cli = yield* AzureDevOpsCli.AzureDevOpsCli;
+        const cli = yield* AzureDevOpsApi.AzureDevOpsApi;
 
         yield* cli.createPullRequest({
           cwd: "/w",
@@ -618,7 +618,7 @@ describe("AzureDevOpsCli over REST", () => {
     );
     return Effect.gen(function* () {
       yield* saveToken;
-      const cli = yield* AzureDevOpsCli.AzureDevOpsCli;
+      const cli = yield* AzureDevOpsApi.AzureDevOpsApi;
 
       const urls = yield* cli.createRepository({
         cwd: "/w",
@@ -649,7 +649,7 @@ describe("azureCliInvocation", () => {
   };
 
   const invocationFor = (install: AzureCliInstall | undefined) =>
-    AzureDevOpsCli.azureCliInvocation().pipe(
+    AzureDevOpsApi.azureCliInvocation().pipe(
       Effect.provideService(HostProcess.Platform, "win32"),
       Effect.provideService(HostProcess.Environment, { PATH: "C:\\tools" }),
       Effect.provideService(SpawnExecutableResolution, () => launcher),
@@ -677,7 +677,7 @@ describe("azureCliInvocation", () => {
 
   it.effect("spawns az directly off Windows", () =>
     Effect.gen(function* () {
-      const invocation = yield* AzureDevOpsCli.azureCliInvocation().pipe(
+      const invocation = yield* AzureDevOpsApi.azureCliInvocation().pipe(
         Effect.provideService(HostProcess.Platform, "linux"),
       );
 
@@ -784,29 +784,5 @@ describe("scopeAzureCliArgs", () => {
     [show, "https://dev.azure.com/acme/Project/_git/%40.env"],
   ])("leaves %j to az when %s gives no scope", (args, url) => {
     expect(scopeAzureCliArgs(args, url)).toEqual(args);
-  });
-});
-
-describe("primaryRemoteUrl", () => {
-  const remotes = (...entries: ReadonlyArray<readonly [string, string]>) =>
-    entries.map(([name, url]) => `${name}\t${url} (fetch)\n${name}\tpush-url (push)\n`).join("");
-  const azure = (name: string) => [name, `https://dev.azure.com/${name}/P/_git/R`] as const;
-
-  it.each([
-    // Where T3 publishes the branch and creates its pull requests.
-    [remotes(azure("upstream"), azure("origin")), azure("origin")[1]],
-    [
-      remotes(["github", "https://github.com/acme/repo"], azure("zebra"), azure("alpha")),
-      azure("zebra")[1],
-    ],
-    // A non-Azure origin leaves detection to az rather than scoping another repository.
-    [
-      remotes(azure("upstream"), ["origin", "https://github.com/acme/repo"]),
-      "https://github.com/acme/repo",
-    ],
-    [remotes(), null],
-    [`origin\t${azure("origin")[1]} (fetch)`, null],
-  ])("picks the scoping remote from %j", (output, url) => {
-    expect(primaryRemoteUrl(output)).toBe(url);
   });
 });
