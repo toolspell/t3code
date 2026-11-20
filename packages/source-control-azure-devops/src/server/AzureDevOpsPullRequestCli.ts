@@ -19,6 +19,7 @@ import type * as SourceControlRateLimit from "@t3tools/source-control-core/serve
 
 import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
 import { blobContent, readBlobZip } from "./azureDevOpsBlobZip.ts";
+import { AzureDevOpsIdentityError, resolveIdentity } from "./azureDevOpsIdentities.ts";
 import * as AzureDevOpsRest from "./AzureDevOpsRest.ts";
 import * as AzureDevOpsRouting from "./AzureDevOpsRouting.ts";
 import {
@@ -107,7 +108,7 @@ export class AzureDevOpsReviewerNameError extends Schema.TaggedError<AzureDevOps
   }
 
   override get message(): string {
-    return `Azure CLI failed in setPullRequestReviewers: ${this.detail}`;
+    return `Azure DevOps failed in setPullRequestReviewers: ${this.detail}`;
   }
 }
 
@@ -117,6 +118,7 @@ export type AzureDevOpsPullRequestCliError =
   | AzureDevOpsPullRequestIncompleteError
   | AzureDevOpsReviewerNameError
   | AzureDevOpsViewerUnavailableError
+  | AzureDevOpsIdentityError
   | AzureDevOpsRest.AzureDevOpsRestError
   | SourceControlRateLimit.SourceControlRateLimitPausedError
   | AzureDevOpsRouting.AzureDevOpsTokenUnavailableError;
@@ -141,6 +143,24 @@ const RestIdentitiesSchema = Schema.Struct({
 const RestPullRequestProjectSchema = Schema.Struct({
   repository: Schema.Struct({ project: Schema.Struct({ id: Schema.NonEmptyString }) }),
 });
+
+/** Where a pull request lives, and what a write needs to carry over from it. */
+const RestPullRequestTargetSchema = Schema.Struct({
+  repository: Schema.Struct({
+    id: Schema.NonEmptyString,
+    project: Schema.Struct({ id: Schema.NonEmptyString }),
+  }),
+  lastMergeSourceCommit: Schema.optional(Schema.Unknown),
+  reviewers: Schema.optional(
+    Schema.NullOr(
+      Schema.Array(
+        Schema.Struct({ id: Schema.String, isRequired: Schema.optional(Schema.Boolean) }),
+      ),
+    ),
+  ),
+});
+
+const NO_IDENTITY = "00000000-0000-0000-0000-000000000000";
 
 const EMPTY_PULL_REQUEST_BATCH: AzureDevOpsPullRequestBatch = {
   items: [],
@@ -351,6 +371,46 @@ function actionArgs(
   }
 }
 
+/** The PATCH body `az repos pr update` sends for `actionArgs`, or null for its no-op update. */
+function restActionBody(
+  action: PullRequestAction,
+  mergeMethod: PullRequestMergeMethod | undefined,
+  context: { readonly lastMergeSourceCommit: unknown; readonly viewerId: string },
+): Record<string, unknown> | null {
+  const completionOptions = (method: PullRequestMergeMethod | undefined) => ({
+    mergeStrategy: method === "squash" ? "squash" : "noFastForward",
+  });
+  switch (action) {
+    case "merge":
+      return {
+        status: "completed",
+        lastMergeSourceCommit: context.lastMergeSourceCommit,
+        completionOptions: completionOptions(mergeMethod),
+      };
+    case "enable-auto-merge":
+      return {
+        autoCompleteSetBy: { id: context.viewerId },
+        ...(mergeMethod === undefined ? {} : { completionOptions: completionOptions(mergeMethod) }),
+      };
+    case "disable-auto-merge":
+      return { autoCompleteSetBy: { id: NO_IDENTITY } };
+    case "ready":
+      return { isDraft: false };
+    case "draft":
+      return { isDraft: true };
+    case "close":
+      return { status: "abandoned" };
+    case "reopen":
+      return { status: "active" };
+    case "update-branch":
+      return null;
+    case "revert":
+    case "approve-workflows":
+    case "delete-branch":
+      throw new Error(`Azure DevOps pull request action ${action} is unsupported`);
+  }
+}
+
 function isReviewerName(value: string): boolean {
   const name = value.trim();
   return name.length > 0 && !name.startsWith("-");
@@ -454,6 +514,42 @@ export const make = Effect.gen(function* () {
     readonly number: number;
   }) =>
     `${AzureDevOpsRest.repositoryPath(input.location.project, input.location.repository)}/pullRequests/${input.number}`;
+
+  /** A pull request numbered in the organization, wherever its repository is, as `--id` finds it. */
+  const restPullRequestTarget = (
+    route: AzureDevOpsRouting.AzureDevOpsRestRoute,
+    operation: string,
+    number: number,
+  ) =>
+    rest
+      .json(
+        {
+          ...AzureDevOpsRouting.credentials(route),
+          operation,
+          path: `_apis/git/pullrequests/${number}`,
+        },
+        RestPullRequestTargetSchema,
+      )
+      .pipe(
+        Effect.map((pullRequest) => ({
+          ...pullRequest,
+          path: `${AzureDevOpsRest.repositoryPath(pullRequest.repository.project.id, pullRequest.repository.id)}/pullRequests/${number}`,
+        })),
+      );
+
+  const restUpdatePullRequest = (
+    route: AzureDevOpsRouting.AzureDevOpsRestRoute,
+    operation: string,
+    path: string,
+    body: Record<string, unknown>,
+  ) =>
+    rest.request({
+      ...AzureDevOpsRouting.credentials(route),
+      operation,
+      method: "PATCH",
+      path,
+      body,
+    });
 
   type PullRequestListInput = Parameters<
     AzureDevOpsPullRequestCli["Service"]["listPullRequests"]
@@ -1103,93 +1199,178 @@ export const make = Effect.gen(function* () {
         if (input.reviewers.some((reviewer) => !isReviewerName(reviewer))) {
           return yield* new AzureDevOpsReviewerNameError({ command: "az", cwd: input.cwd });
         }
-        return yield* azure
-          .execute({
-            cwd: input.cwd,
-            args: [
-              "repos",
-              "pr",
-              "reviewer",
-              input.requested ? "add" : "remove",
-              ...detectArgs,
-              "--id",
-              String(input.number),
-              // Repeating `--reviewers` replaces the earlier list.
-              "--reviewers",
-              ...input.reviewers,
-              "--only-show-errors",
-              "--output",
-              "json",
-            ],
-          })
-          .pipe(Effect.asVoid);
+        return yield* AzureDevOpsRouting.byRoute(routing, input, {
+          rest: Effect.fn("AzureDevOpsPullRequestCli.restSetPullRequestReviewers")(
+            function* (route) {
+              const operation = "setPullRequestReviewers";
+              const request = { ...AzureDevOpsRouting.credentials(route), operation };
+              const identities = yield* Effect.forEach(input.reviewers, (reviewer) =>
+                resolveIdentity(rest, request, reviewer),
+              );
+              const pullRequest = yield* restPullRequestTarget(route, operation, input.number);
+              const current = new Map(
+                (pullRequest.reviewers ?? []).map((reviewer) => [
+                  reviewer.id.toLowerCase(),
+                  reviewer,
+                ]),
+              );
+              yield* Effect.forEach(
+                identities,
+                (identity) =>
+                  rest.request({
+                    ...request,
+                    method: input.requested ? "PUT" : "DELETE",
+                    path: `${pullRequest.path}/reviewers/${encodeURIComponent(identity.id)}`,
+                    // PUT replaces the entry, so a required reviewer stays required.
+                    ...(input.requested
+                      ? {
+                          body: {
+                            vote: 0,
+                            isRequired: current.get(identity.id.toLowerCase())?.isRequired ?? false,
+                          },
+                        }
+                      : {}),
+                  }),
+                { discard: true },
+              );
+            },
+          ),
+          cli: () =>
+            azure
+              .execute({
+                cwd: input.cwd,
+                args: [
+                  "repos",
+                  "pr",
+                  "reviewer",
+                  input.requested ? "add" : "remove",
+                  ...detectArgs,
+                  "--id",
+                  String(input.number),
+                  // Repeating `--reviewers` replaces the earlier list.
+                  "--reviewers",
+                  ...input.reviewers,
+                  "--only-show-errors",
+                  "--output",
+                  "json",
+                ],
+              })
+              .pipe(Effect.asVoid),
+        });
       },
     ),
 
     runPullRequestAction: Effect.fn("AzureDevOpsPullRequestCli.runPullRequestAction")(
       function (input) {
-        return azure
-          .execute({
-            cwd: input.cwd,
-            args: [
-              "repos",
-              "pr",
-              "update",
-              ...detectArgs,
-              "--id",
-              String(input.number),
-              ...actionArgs(input.action, input.mergeMethod),
-              "--only-show-errors",
-              "--output",
-              "json",
-            ],
-          })
-          .pipe(
-            // `pr update` prints the pull request it left, in the shape `pr show` prints.
-            Effect.map((result) => {
-              const decoded = decodePullRequestJson(result.stdout.trim());
-              return Result.isSuccess(decoded) ? (decoded.success ?? undefined) : undefined;
-            }),
-          );
+        const decodeUpdated = (raw: string) => {
+          const decoded = decodePullRequestJson(raw);
+          return Result.isSuccess(decoded) ? (decoded.success ?? undefined) : undefined;
+        };
+        return AzureDevOpsRouting.byRoute(routing, input, {
+          rest: Effect.fn("AzureDevOpsPullRequestCli.restRunPullRequestAction")(function* (route) {
+            const operation = "runPullRequestAction";
+            const pullRequest = yield* restPullRequestTarget(route, operation, input.number);
+            const viewerId =
+              input.action === "enable-auto-merge"
+                ? (yield* rest.json(
+                    {
+                      ...AzureDevOpsRouting.credentials(route),
+                      operation,
+                      path: "_apis/connectionData",
+                      apiVersion: "7.1-preview",
+                    },
+                    RestViewerIdSchema,
+                  )).authenticatedUser.id
+                : NO_IDENTITY;
+            const body = restActionBody(input.action, input.mergeMethod, {
+              lastMergeSourceCommit: pullRequest.lastMergeSourceCommit,
+              viewerId,
+            });
+            const answer =
+              body === null
+                ? yield* rest.request({
+                    ...AzureDevOpsRouting.credentials(route),
+                    operation,
+                    path: pullRequest.path,
+                  })
+                : yield* restUpdatePullRequest(route, operation, pullRequest.path, body);
+            return decodeUpdated(new TextDecoder().decode(answer.bytes));
+          }),
+          cli: () =>
+            azure
+              .execute({
+                cwd: input.cwd,
+                args: [
+                  "repos",
+                  "pr",
+                  "update",
+                  ...detectArgs,
+                  "--id",
+                  String(input.number),
+                  ...actionArgs(input.action, input.mergeMethod),
+                  "--only-show-errors",
+                  "--output",
+                  "json",
+                ],
+              })
+              // `pr update` prints the pull request it left, in the shape `pr show` prints.
+              .pipe(Effect.map((result) => decodeUpdated(result.stdout.trim()))),
+        });
       },
     ),
 
     updatePullRequest: Effect.fn("AzureDevOpsPullRequestCli.updatePullRequest")(function (input) {
-      // One argv entry preserves leading dashes and multi-string descriptions.
-      const fields = [
-        ...(input.title === undefined ? [] : [AzureDevOpsCli.textOption("--title", input.title)]),
-        ...(input.body === undefined
-          ? []
-          : [AzureDevOpsCli.textOption("--description", input.body)]),
-      ];
-      // az has one stdin, so each value read from it needs its own call.
-      const batches =
-        fields.filter((field) => field.stdin !== undefined).length > 1
-          ? fields.map((field) => [field])
-          : [fields];
-      return Effect.forEach(
-        batches,
-        (batch) => {
-          const stdin = batch.find((field) => field.stdin !== undefined)?.stdin;
-          return azure.execute({
-            cwd: input.cwd,
-            args: [
-              "repos",
-              "pr",
-              "update",
-              ...detectArgs,
-              "--id",
-              String(input.number),
-              ...batch.map((field) => field.arg),
-              "--only-show-errors",
-              "--output",
-              "json",
-            ],
-            ...(stdin === undefined ? {} : { stdin }),
-          });
+      return AzureDevOpsRouting.byRoute(routing, input, {
+        rest: (route) =>
+          restPullRequestTarget(route, "updatePullRequest", input.number).pipe(
+            Effect.flatMap((pullRequest) =>
+              restUpdatePullRequest(route, "updatePullRequest", pullRequest.path, {
+                ...(input.title === undefined ? {} : { title: input.title }),
+                ...(input.body === undefined ? {} : { description: input.body }),
+              }),
+            ),
+            Effect.asVoid,
+          ),
+        cli: () => {
+          // One argv entry preserves leading dashes and multi-string descriptions.
+          const fields = [
+            ...(input.title === undefined
+              ? []
+              : [AzureDevOpsCli.textOption("--title", input.title)]),
+            ...(input.body === undefined
+              ? []
+              : [AzureDevOpsCli.textOption("--description", input.body)]),
+          ];
+          // az has one stdin, so each value read from it needs its own call.
+          const batches =
+            fields.filter((field) => field.stdin !== undefined).length > 1
+              ? fields.map((field) => [field])
+              : [fields];
+          return Effect.forEach(
+            batches,
+            (batch) => {
+              const stdin = batch.find((field) => field.stdin !== undefined)?.stdin;
+              return azure.execute({
+                cwd: input.cwd,
+                args: [
+                  "repos",
+                  "pr",
+                  "update",
+                  ...detectArgs,
+                  "--id",
+                  String(input.number),
+                  ...batch.map((field) => field.arg),
+                  "--only-show-errors",
+                  "--output",
+                  "json",
+                ],
+                ...(stdin === undefined ? {} : { stdin }),
+              });
+            },
+            { discard: true },
+          );
         },
-        { discard: true },
-      );
+      });
     }),
   });
 });

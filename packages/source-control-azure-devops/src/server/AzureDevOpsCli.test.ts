@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it, afterEach, describe, expect, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/http";
 import * as Option from "effect/Option";
@@ -558,6 +559,84 @@ describe("AzureDevOpsCli over REST", () => {
       for (const [name, value] of Object.entries(query)) {
         assert.strictEqual(url.searchParams.get(name), value, name);
       }
+    }).pipe(Effect.provide(layer));
+  });
+
+  const bodyOf = (request: HttpClientRequest.HttpClientRequest | undefined): unknown => {
+    assert.isDefined(request);
+    return request.body._tag === "Uint8Array"
+      ? JSON.parse(new TextDecoder().decode(request.body.body))
+      : undefined;
+  };
+
+  it.effect.each([
+    { source: "user/feat", target: undefined, sourceRef: "refs/heads/user/feat" },
+    { source: "@scratch", target: undefined, sourceRef: "refs/heads/@scratch" },
+    { source: "refs/heads/done", target: "refs/heads/release", sourceRef: "refs/heads/done" },
+  ])(
+    "posts a pull request from $source over REST with the body file's text",
+    ({ source, target, sourceRef }) => {
+      const { requests, az, layer, saveToken } = routed(() => Response.json(pullRequest));
+      return Effect.gen(function* () {
+        yield* saveToken;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const directory = yield* fileSystem.makeTempDirectoryScoped();
+        const bodyFile = `${directory}/body.md`;
+        yield* fileSystem.writeFileString(bodyFile, "@notes.txt\n- from the file");
+        const cli = yield* AzureDevOpsCli.AzureDevOpsCli;
+
+        yield* cli.createPullRequest({
+          cwd: "/w",
+          baseBranch: "main",
+          headSelector: source,
+          ...(target === undefined ? {} : { target: { refName: target } }),
+          title: "@title",
+          bodyFile,
+        });
+
+        expect(az).not.toHaveBeenCalled();
+        const [request] = requests;
+        assert.isDefined(request);
+        assert.strictEqual(request.method, "POST");
+        assert.strictEqual(
+          new URL(request.url).pathname,
+          "/contoso/Web%20Site/_apis/git/repositories/web%20app/pullrequests",
+        );
+        expect(bodyOf(request)).toEqual({
+          sourceRefName: sourceRef,
+          targetRefName: target ?? "refs/heads/main",
+          title: "@title",
+          description: "@notes.txt\n- from the file",
+        });
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect("creates a repository over REST in the project id its name resolves to", () => {
+    const { requests, az, layer, saveToken } = routed((request) =>
+      request.method === "GET" ? Response.json({ id: "project-id" }) : Response.json(repository),
+    );
+    return Effect.gen(function* () {
+      yield* saveToken;
+      const cli = yield* AzureDevOpsCli.AzureDevOpsCli;
+
+      const urls = yield* cli.createRepository({
+        cwd: "/w",
+        repository: "Other Project/repo",
+        visibility: "public",
+      });
+
+      expect(az).not.toHaveBeenCalled();
+      assert.strictEqual(urls.nameWithOwner, "Other Project/repo");
+      assert.deepStrictEqual(
+        requests.map((request) => [request.method, new URL(request.url).pathname]),
+        [
+          ["GET", "/contoso/_apis/projects/Other%20Project"],
+          ["POST", "/contoso/Other%20Project/_apis/git/repositories"],
+        ],
+      );
+      // `az repos create` has no visibility flag, so the project's settings decide it here too.
+      expect(bodyOf(requests[1])).toEqual({ name: "repo", project: { id: "project-id" } });
     }).pipe(Effect.provide(layer));
   });
 });

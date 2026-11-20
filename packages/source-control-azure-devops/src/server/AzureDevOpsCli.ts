@@ -1,5 +1,6 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Result from "effect/Result";
@@ -211,8 +212,8 @@ export const AzureDevOpsCliError = Schema.Union([
 ]);
 export type AzureDevOpsCliError = typeof AzureDevOpsCliError.Type;
 
-/** A read that an organization with a saved token sends over REST instead. */
-export type AzureDevOpsReadError =
+/** A call that an organization with a saved token sends over REST instead. */
+export type AzureDevOpsRoutedError =
   | AzureDevOpsCliError
   | AzureDevOpsRest.AzureDevOpsRestError
   | SourceControlRateLimit.SourceControlRateLimitPausedError
@@ -246,26 +247,26 @@ export class AzureDevOpsCli extends Context.Service<
       readonly remoteUrl?: string;
     }) => Effect.Effect<
       ReadonlyArray<NormalizedAzureDevOpsPullRequestRecord>,
-      AzureDevOpsReadError
+      AzureDevOpsRoutedError
     >;
 
     readonly getPullRequest: (input: {
       readonly cwd: string;
       readonly reference: string;
       readonly remoteUrl?: string;
-    }) => Effect.Effect<NormalizedAzureDevOpsPullRequestRecord, AzureDevOpsReadError>;
+    }) => Effect.Effect<NormalizedAzureDevOpsPullRequestRecord, AzureDevOpsRoutedError>;
 
     readonly getRepositoryCloneUrls: (input: {
       readonly cwd: string;
       readonly repository: string;
       readonly remoteUrl?: string;
-    }) => Effect.Effect<AzureDevOpsRepositoryCloneUrls, AzureDevOpsReadError>;
+    }) => Effect.Effect<AzureDevOpsRepositoryCloneUrls, AzureDevOpsRoutedError>;
 
     readonly createRepository: (input: {
       readonly cwd: string;
       readonly repository: string;
       readonly visibility: SourceControlRepositoryVisibility;
-    }) => Effect.Effect<AzureDevOpsRepositoryCloneUrls, AzureDevOpsCliError>;
+    }) => Effect.Effect<AzureDevOpsRepositoryCloneUrls, AzureDevOpsRoutedError>;
 
     readonly createPullRequest: (input: {
       readonly cwd: string;
@@ -276,13 +277,13 @@ export class AzureDevOpsCli extends Context.Service<
       readonly title: string;
       readonly bodyFile: string;
       readonly remoteUrl?: string;
-    }) => Effect.Effect<void, AzureDevOpsCliError>;
+    }) => Effect.Effect<void, AzureDevOpsRoutedError>;
 
     readonly getDefaultBranch: (input: {
       readonly cwd: string;
       readonly repository: string;
       readonly remoteUrl?: string;
-    }) => Effect.Effect<string | null, AzureDevOpsReadError>;
+    }) => Effect.Effect<string | null, AzureDevOpsRoutedError>;
   }
 >()("@t3tools/source-control-azure-devops/server/AzureDevOpsCli") {}
 
@@ -317,6 +318,10 @@ const RawAzureDevOpsRepositorySchema = Schema.Struct({
   ),
   defaultBranch: Schema.optional(Schema.NullOr(Schema.String)),
 });
+
+const RestProjectSchema = Schema.Struct({ id: TrimmedNonEmptyString });
+
+const qualifiedBranch = (name: string) => (name.startsWith("refs/") ? name : `refs/heads/${name}`);
 
 function normalizeDefaultBranch(value: string | null | undefined): string | null {
   const trimmed = value?.trim().replace(/^refs\/heads\//, "") ?? "";
@@ -571,6 +576,7 @@ export const make = Effect.gen(function* () {
   const { process } = yield* SourceControlHost.SourceControlHost;
   const rest = yield* AzureDevOpsRest.AzureDevOpsRest;
   const routing = yield* AzureDevOpsRouting.AzureDevOpsRouting;
+  const fileSystem = yield* FileSystem.FileSystem;
   const invocation = yield* azureCliInvocation();
 
   const execute: AzureDevOpsCli["Service"]["execute"] = Effect.fn("AzureDevOpsCli.execute")(
@@ -838,47 +844,114 @@ export const make = Effect.gen(function* () {
     createRepository: Effect.fn("AzureDevOpsCli.createRepository")(function (input) {
       const repository = parseRepositorySpecifier(input.repository);
       // Project/organization permissions control visibility; `az repos create` has no flag.
-      return executeJson({
-        cwd: input.cwd,
-        args: [
-          "repos",
-          "create",
-          "--detect",
-          "true",
-          "--name",
-          repository.name,
-          ...(repository.project ? ["--project", repository.project] : []),
-        ],
-      }).pipe(
-        Effect.map((result) => result.stdout.trim()),
-        Effect.flatMap((raw) =>
-          decodeAzureDevOpsJson(raw, RawAzureDevOpsRepositorySchema, "createRepository", input.cwd),
-        ),
-        Effect.map(normalizeRepositoryCloneUrls),
-      );
+      return AzureDevOpsRouting.byRoute(routing, input, {
+        rest: (route) => {
+          const credentials = {
+            ...AzureDevOpsRouting.credentials(route),
+            operation: "createRepository",
+          };
+          const project = repository.project ?? route.project;
+          return rest
+            .json(
+              { ...credentials, path: `_apis/projects/${encodeURIComponent(project)}` },
+              RestProjectSchema,
+            )
+            .pipe(
+              Effect.flatMap(({ id }) =>
+                rest.json(
+                  {
+                    ...credentials,
+                    method: "POST",
+                    path: `${encodeURIComponent(project)}/_apis/git/repositories`,
+                    body: { name: repository.name, project: { id } },
+                  },
+                  RawAzureDevOpsRepositorySchema,
+                ),
+              ),
+              Effect.map(normalizeRepositoryCloneUrls),
+            );
+        },
+        cli: () =>
+          executeJson({
+            cwd: input.cwd,
+            args: [
+              "repos",
+              "create",
+              "--detect",
+              "true",
+              "--name",
+              repository.name,
+              ...(repository.project ? ["--project", repository.project] : []),
+            ],
+          }).pipe(
+            Effect.map((result) => result.stdout.trim()),
+            Effect.flatMap((raw) =>
+              decodeAzureDevOpsJson(
+                raw,
+                RawAzureDevOpsRepositorySchema,
+                "createRepository",
+                input.cwd,
+              ),
+            ),
+            Effect.map(normalizeRepositoryCloneUrls),
+          ),
+      });
     }),
     createPullRequest: Effect.fn("AzureDevOpsCli.createPullRequest")(function (input) {
-      // A full ref keeps a branch named `@...` from reading as a file; az accepts either form.
-      const branch = (name: string) => (name.startsWith("@") ? `refs/heads/${name}` : name);
-      const title = textOption("--title", input.title);
-      return execute({
-        cwd: input.cwd,
-        ...remoteOf(input),
-        args: [
-          "repos",
-          "pr",
-          "create",
-          "--only-show-errors",
-          "--detect",
-          "true",
-          `--target-branch=${branch(input.target?.refName ?? input.baseBranch)}`,
-          `--source-branch=${branch(SourceControlProvider.sourceBranch(input))}`,
-          title.arg,
-          // Joined: az expands a separate `@file` value again, so a body of `@path` read that file.
-          `--description=@${input.bodyFile}`,
-        ],
-        ...(title.stdin === undefined ? {} : { stdin: title.stdin }),
-      }).pipe(Effect.asVoid);
+      const target = input.target?.refName ?? input.baseBranch;
+      const source = SourceControlProvider.sourceBranch(input);
+      return AzureDevOpsRouting.byRoute(routing, input, {
+        rest: (route) =>
+          fileSystem.readFileString(input.bodyFile).pipe(
+            Effect.mapError(
+              (cause) =>
+                new AzureDevOpsRest.AzureDevOpsRestError({
+                  operation: "createPullRequest",
+                  reason: "request",
+                  cause,
+                }),
+            ),
+            Effect.flatMap((description) =>
+              rest.request({
+                ...AzureDevOpsRouting.credentials(route),
+                operation: "createPullRequest",
+                method: "POST",
+                path: `${AzureDevOpsRest.repositoryPath(route.project, route.repository)}/pullrequests`,
+                // az qualifies a bare branch name the same way.
+                body: {
+                  sourceRefName: qualifiedBranch(source),
+                  targetRefName: qualifiedBranch(target),
+                  title: input.title,
+                  description,
+                },
+              }),
+            ),
+            Effect.asVoid,
+          ),
+        cli: () => {
+          // A full ref keeps a branch named `@...` from reading as a file; az accepts either form.
+          const branch = (name: string) => (name.startsWith("@") ? `refs/heads/${name}` : name);
+          const title = textOption("--title", input.title);
+          return execute({
+            cwd: input.cwd,
+            ...remoteOf(input),
+            args: [
+              "repos",
+              "pr",
+              "create",
+              "--only-show-errors",
+              "--detect",
+              "true",
+              `--target-branch=${branch(target)}`,
+              `--source-branch=${branch(source)}`,
+              title.arg,
+              // Joined: az expands a separate `@file` value again, so a body of `@path` read that file.
+              `--description=@${input.bodyFile}`,
+            ],
+            ...(title.stdin === undefined ? {} : { stdin: title.stdin }),
+          }).pipe(Effect.asVoid);
+        },
+      });
     }),
   });
 });

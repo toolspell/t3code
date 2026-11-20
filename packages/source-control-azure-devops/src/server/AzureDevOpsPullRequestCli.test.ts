@@ -532,6 +532,260 @@ it.effect("posts the blob ids over REST and reads the zip as az's archive is rea
   }).pipe(Effect.provide(layer));
 });
 
+const bodyOf = (request: HttpClientRequest.HttpClientRequest | undefined): unknown => {
+  assert.isDefined(request);
+  return request.body._tag === "Uint8Array"
+    ? JSON.parse(new TextDecoder().decode(request.body.body))
+    : undefined;
+};
+
+/** Azure as a write sees it: pull request 42 lives in another project and repository than the remote. */
+function writable(
+  respond: (
+    request: HttpClientRequest.HttpClientRequest,
+    body: unknown,
+  ) => Response | undefined = () => undefined,
+) {
+  return routed((request) => {
+    const url = new URL(request.url);
+    const answer = respond(request, bodyOf(request));
+    if (answer !== undefined) return answer;
+    if (url.pathname.endsWith("/_apis/resourceAreas")) return Response.json({ value: [] });
+    if (url.pathname.endsWith("/_apis/connectionData")) {
+      return Response.json({ authenticatedUser: { id: "viewer-id" } });
+    }
+    if (url.pathname === "/contoso/_apis/git/pullrequests/42") {
+      return Response.json({
+        ...pullRequestRow,
+        repository: { id: "repo-id", project: { id: "project-id" } },
+        lastMergeSourceCommit: { commitId: "a".repeat(40) },
+        reviewers: [{ id: "required-id", isRequired: true, vote: 0 }],
+      });
+    }
+    return Response.json(pullRequestRow);
+  });
+}
+
+const restWritePath = "/contoso/project-id/_apis/git/repositories/repo-id/pullRequests/42";
+
+it.effect.each([
+  {
+    write: "a title and description",
+    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+      cli.updatePullRequest({ cwd: "/w", number: 42, title: "@title", body: "- body" }),
+    body: { title: "@title", description: "- body" },
+  },
+  {
+    write: "a title alone",
+    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+      cli.updatePullRequest({ cwd: "/w", number: 42, title: "Renamed" }),
+    body: { title: "Renamed" },
+  },
+  ...(
+    [
+      [
+        "merge",
+        "squash",
+        {
+          status: "completed",
+          lastMergeSourceCommit: { commitId: "a".repeat(40) },
+          completionOptions: { mergeStrategy: "squash" },
+        },
+      ],
+      [
+        "merge",
+        "merge",
+        {
+          status: "completed",
+          lastMergeSourceCommit: { commitId: "a".repeat(40) },
+          completionOptions: { mergeStrategy: "noFastForward" },
+        },
+      ],
+      [
+        "enable-auto-merge",
+        "squash",
+        { autoCompleteSetBy: { id: "viewer-id" }, completionOptions: { mergeStrategy: "squash" } },
+      ],
+      ["enable-auto-merge", undefined, { autoCompleteSetBy: { id: "viewer-id" } }],
+      [
+        "disable-auto-merge",
+        undefined,
+        { autoCompleteSetBy: { id: "00000000-0000-0000-0000-000000000000" } },
+      ],
+      ["ready", undefined, { isDraft: false }],
+      ["draft", undefined, { isDraft: true }],
+      ["close", undefined, { status: "abandoned" }],
+      ["reopen", undefined, { status: "active" }],
+    ] as const
+  ).map(([action, mergeMethod, body]) => ({
+    write: `${action}${mergeMethod === undefined ? "" : ` by ${mergeMethod}`}`,
+    call: (cli: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]) =>
+      cli.runPullRequestAction({
+        cwd: "/w",
+        number: 42,
+        action,
+        ...(mergeMethod === undefined ? {} : { mergeMethod }),
+      }),
+    body,
+  })),
+])("patches $write over REST where the pull request lives", ({ call, body }) => {
+  const { requests, execute, layer, saveToken } = writable();
+  return Effect.gen(function* () {
+    yield* saveToken(true);
+    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+    yield* call(cli);
+
+    expect(execute).not.toHaveBeenCalled();
+    const patch = requests.at(-1);
+    assert.strictEqual(patch?.method, "PATCH");
+    assert.strictEqual(urlOf(patch).pathname, restWritePath);
+    expect(bodyOf(patch)).toEqual(body);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("returns the pull request an action left, as az prints it", () => {
+  const { layer, saveToken } = writable((request) =>
+    request.method === "PATCH" ? Response.json({ ...pullRequestRow, isDraft: true }) : undefined,
+  );
+  return Effect.gen(function* () {
+    yield* saveToken(true);
+    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+    const left = yield* cli.runPullRequestAction({ cwd: "/w", number: 42, action: "draft" });
+    assert.strictEqual(left?.isDraft, true);
+  }).pipe(Effect.provide(layer));
+});
+
+const picker = (identities: ReadonlyArray<{ id: string; name: string; mail: string }>) =>
+  Response.json({
+    results: [
+      {
+        identities: identities.map((identity) => ({
+          localId: identity.id,
+          displayName: identity.name,
+          mail: identity.mail,
+        })),
+      },
+    ],
+  });
+
+/** Identities by exact email, and the picker's prefix matches for `Ana` and `Sam`. */
+const directory = (request: HttpClientRequest.HttpClientRequest, body: unknown) => {
+  const url = new URL(request.url);
+  if (url.pathname === "/contoso/_apis/identities") {
+    const id = { "ana@acme.dev": "ana-id", "req@acme.dev": "required-id" }[
+      url.searchParams.get("filterValue") ?? ""
+    ];
+    return Response.json({ value: id === undefined ? [] : [{ id }] });
+  }
+  if (url.pathname === "/contoso/_apis/IdentityPicker/Identities") {
+    const query = (body as { query?: string }).query;
+    if (query === "Ana") return picker([{ id: "ana-id", name: "Ana", mail: "ana@acme.dev" }]);
+    if (query === "Sam") {
+      return picker([
+        { id: "sam-1", name: "Sam Lee", mail: "sam.lee@acme.dev" },
+        { id: "sam-2", name: "Sam Roe", mail: "sam.roe@acme.dev" },
+      ]);
+    }
+    return picker([]);
+  }
+  return undefined;
+};
+
+it.effect.each([
+  { requested: true, reviewers: ["ana@acme.dev"], lookup: "identities" },
+  { requested: true, reviewers: ["Ana"], lookup: "picker" },
+  { requested: false, reviewers: ["Ana"], lookup: "picker" },
+] as const)(
+  "names reviewer $reviewers by its $lookup identity and requested=$requested over REST",
+  ({ requested, reviewers, lookup }) => {
+    const { requests, execute, layer, saveToken } = writable(directory);
+    return Effect.gen(function* () {
+      yield* saveToken(true);
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+      yield* cli.setPullRequestReviewers({ cwd: "/w", number: 42, reviewers, requested });
+
+      expect(execute).not.toHaveBeenCalled();
+      const write = requests.at(-1);
+      assert.strictEqual(write?.method, requested ? "PUT" : "DELETE");
+      assert.strictEqual(urlOf(write).pathname, `${restWritePath}/reviewers/ana-id`);
+      expect(bodyOf(write)).toEqual(requested ? { vote: 0, isRequired: false } : undefined);
+      if (lookup === "picker") {
+        const search = requests.find((request) => request.url.includes("/IdentityPicker/"));
+        assert.strictEqual(search?.method, "POST");
+        assert.strictEqual(urlOf(search).searchParams.get("api-version"), "7.1-preview.1");
+        expect(bodyOf(search)).toEqual({
+          query: "Ana",
+          identityTypes: ["user"],
+          operationScopes: ["ims", "source"],
+          options: { MinResults: 5, MaxResults: 20 },
+          properties: ["DisplayName", "Mail"],
+        });
+      } else {
+        const search = urlOf(requests.find((request) => request.url.includes("/_apis/identities")));
+        assert.strictEqual(search.searchParams.get("searchFilter"), "General");
+        assert.strictEqual(search.searchParams.get("queryMembership"), "None");
+      }
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("keeps a required reviewer required when adding them again over REST", () => {
+  const { requests, layer, saveToken } = writable(directory);
+  return Effect.gen(function* () {
+    yield* saveToken(true);
+    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+    yield* cli.setPullRequestReviewers({
+      cwd: "/w",
+      number: 42,
+      reviewers: ["req@acme.dev", "ana@acme.dev"],
+      requested: true,
+    });
+
+    const puts = requests.filter((request) => request.method === "PUT");
+    assert.deepStrictEqual(
+      puts.map((request) => [urlOf(request).pathname.split("/").at(-1), bodyOf(request)]),
+      [
+        ["required-id", { vote: 0, isRequired: true }],
+        ["ana-id", { vote: 0, isRequired: false }],
+      ],
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect.each([
+  {
+    reviewer: "Sam",
+    candidates: ["Sam Lee (sam.lee@acme.dev)", "Sam Roe (sam.roe@acme.dev)"],
+  },
+  { reviewer: "Nobody", candidates: [] },
+  { reviewer: "nobody@acme.dev", candidates: [] },
+])("writes no reviewer when $reviewer names no single user", ({ reviewer, candidates }) => {
+  const { requests, layer, saveToken } = writable(directory);
+  return Effect.gen(function* () {
+    yield* saveToken(true);
+    const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+    const error = yield* Effect.flip(
+      cli.setPullRequestReviewers({
+        cwd: "/w",
+        number: 42,
+        reviewers: ["ana@acme.dev", reviewer],
+        requested: true,
+      }),
+    );
+
+    assert.strictEqual(error._tag, "AzureDevOpsIdentityError");
+    if (error._tag === "AzureDevOpsIdentityError") {
+      assert.deepStrictEqual(error.candidates, candidates);
+      for (const candidate of candidates) expect(error.detail).toContain(candidate);
+    }
+    expect(requests.some((request) => request.method === "PUT")).toBe(false);
+  }).pipe(Effect.provide(layer));
+});
+
 afterEach(() => {
   mockedExecute.mockReset();
 });
